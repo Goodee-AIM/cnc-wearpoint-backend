@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from routers.health import router as health_router
+
 load_dotenv()
 
 app = FastAPI(title="CNC WearPoint API")
@@ -22,12 +24,4 @@ app.add_middleware(
     allow_credentials=False,
 )
 
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-
-@app.get("/api/test")
-def api_test():
-    return {"message": "Backend connected"}
+app.include_router(health_router)
