@@ -16,3 +16,6 @@ __pycache__/
 
 # 로그
 *.log
+
+# 원본 데이터 저장소
+storage/
