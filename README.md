@@ -35,7 +35,7 @@ Copy-Item .env.example .env
 **FastAPI 실행**
 
 ```powershell
-python -m uvicorn main:app --reload
+python -m uvicorn app-main:app --reload
 ```
 
 ## 3. API 확인
