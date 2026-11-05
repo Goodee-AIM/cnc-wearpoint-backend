@@ -3,6 +3,8 @@ from pathlib import Path
 
 import mysql.connector
 from dotenv import load_dotenv
+ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(dotenv_path=ENV_PATH, encoding="utf-8-sig")
 
 
 # 프로젝트 최상위의 .env 파일 로드

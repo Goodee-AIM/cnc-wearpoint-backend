@@ -1,5 +1,6 @@
 import os
 from app.api.routers.sets import router as sets_router
+from app.api.routers.sensors import router as sensors_router
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,3 +22,4 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(images_router)
 app.include_router(sets_router)
+app.include_router(sensors_router)
