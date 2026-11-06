@@ -18,16 +18,16 @@ def get_sets():
             cursor.execute(
                 """
                 SELECT
-                    s.id,
+                    s.set_id,
                     s.set_number,
                     s.set_name,
                     s.material,
                     COUNT(m.id) AS measurement_count
                 FROM tool_sets AS s
-                LEFT JOIN measurements AS m ON m.set_id = s.id
+                LEFT JOIN measurements AS m ON m.set_id = s.set_id
                 WHERE s.set_number BETWEEN 4 AND 11
                 GROUP BY
-                    s.id, s.set_number, s.set_name, s.material
+                    s.set_id, s.set_number, s.set_name, s.material
                 ORDER BY s.set_number
                 """
             )
@@ -54,7 +54,7 @@ def get_measurements(
         try:
             cursor.execute(
                 """
-                SELECT id, set_number, set_name
+                SELECT set_id, set_number, set_name
                 FROM tool_sets
                 WHERE set_number = %s
                 """,
@@ -68,7 +68,7 @@ def get_measurements(
                     detail="등록되지 않은 Set입니다.",
                 )
 
-            set_id = selected_set["id"]
+            set_id = selected_set["set_id"]
 
             cursor.execute(
                 """
@@ -89,15 +89,15 @@ def get_measurements(
                     m.image_path,
                     m.sensor_name,
                     m.sensor_path,
-                    m.source_image_id,
-                    m.source_sensor_id,
+                    m.image_id,
+                    m.sensor_id,
                     m.image_captured_at,
                     m.sensor_started_at,
                     m.sensor_ended_at,
                     m.status AS measurement_status,
 
-                    l.actual_wear_um,
-                    l.actual_type,
+                    l.original_wear_um,
+                    l.original_type,
 
                     p.id AS prediction_id,
                     p.predicted_wear_um,
@@ -123,7 +123,7 @@ def get_measurements(
                 WHERE m.set_id = %s
 
                 ORDER BY
-                    COALESCE(m.source_image_id, m.source_sensor_id),
+                    COALESCE(m.image_id, m.sensor_id),
                     m.id
 
                 LIMIT %s OFFSET %s
@@ -135,7 +135,7 @@ def get_measurements(
 
             # 예측 마모량과 정답 마모량을 서로 구분하여 반환합니다.
             for item in items:
-                for field in ("actual_wear_um", "predicted_wear_um"):
+                for field in ("original_wear_um", "predicted_wear_um"):
                     if item[field] is not None:
                         item[field] = float(item[field])
 

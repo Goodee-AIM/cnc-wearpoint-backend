@@ -6,6 +6,7 @@ from app.core.database import get_connection
 
 
 BASE_DIR = Path(__file__).resolve().parent
+MODEL_NAME = "rf-csv-demo"
 MODEL_VERSION = "rf-csv-demo-v1"
 WARNING = Decimal("50")
 DANGER = Decimal("90")
@@ -46,7 +47,7 @@ def main():
                 m.image_name,
                 m.sensor_name
             FROM measurements AS m
-            JOIN tool_sets AS s ON s.id = m.set_id
+            JOIN tool_sets AS s ON s.set_id = m.set_id
             WHERE s.set_number BETWEEN 4 AND 11
               AND m.image_name IS NOT NULL
             """
@@ -112,9 +113,10 @@ def main():
                 SELECT predicted_wear_um
                 FROM predictions
                 WHERE measurement_id = %s
+                  AND model_name = %s
                   AND model_version = %s
                 """,
-                (measurement["id"], MODEL_VERSION),
+                (measurement["id"], MODEL_NAME, MODEL_VERSION),
             )
 
             existing = cursor.fetchall()
@@ -145,16 +147,18 @@ def main():
                     measurement_id,
                     predicted_wear_um,
                     predicted_type,
+                    model_name,
                     model_version,
                     warning_threshold_um,
                     danger_threshold_um,
                     status
                 )
-                VALUES (%s, %s, NULL, %s, %s, %s, %s)
+                VALUES (%s, %s, NULL, %s, %s, %s, %s, %s)
                 """,
                 (
                     measurement["id"],
                     predicted,
+                    MODEL_NAME,
                     MODEL_VERSION,
                     WARNING,
                     DANGER,
@@ -186,4 +190,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()  
+    main()
