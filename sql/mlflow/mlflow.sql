@@ -19,10 +19,9 @@
 -- Table structure for table `alembic_version`
 --
 
-DROP TABLE IF EXISTS `alembic_version`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `alembic_version` (
+CREATE TABLE IF NOT EXISTS `alembic_version` (
   `version_num` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   PRIMARY KEY (`version_num`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
@@ -41,10 +40,9 @@ UNLOCK TABLES;
 -- Table structure for table `assessments`
 --
 
-DROP TABLE IF EXISTS `assessments`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `assessments` (
+CREATE TABLE IF NOT EXISTS `assessments` (
   `assessment_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `trace_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `name` varchar(250) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -90,10 +88,9 @@ UNLOCK TABLES;
 -- Table structure for table `budget_policies`
 --
 
-DROP TABLE IF EXISTS `budget_policies`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `budget_policies` (
+CREATE TABLE IF NOT EXISTS `budget_policies` (
   `budget_policy_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `budget_unit` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `budget_amount` double NOT NULL,
@@ -126,10 +123,9 @@ UNLOCK TABLES;
 -- Table structure for table `datasets`
 --
 
-DROP TABLE IF EXISTS `datasets`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `datasets` (
+CREATE TABLE IF NOT EXISTS `datasets` (
   `dataset_uuid` varchar(36) COLLATE utf8mb4_0900_bin NOT NULL,
   `experiment_id` int NOT NULL,
   `name` varchar(500) COLLATE utf8mb4_0900_bin NOT NULL,
@@ -158,10 +154,9 @@ UNLOCK TABLES;
 -- Table structure for table `endpoint_bindings`
 --
 
-DROP TABLE IF EXISTS `endpoint_bindings`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `endpoint_bindings` (
+CREATE TABLE IF NOT EXISTS `endpoint_bindings` (
   `endpoint_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `resource_type` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `resource_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -188,10 +183,9 @@ UNLOCK TABLES;
 -- Table structure for table `endpoint_model_mappings`
 --
 
-DROP TABLE IF EXISTS `endpoint_model_mappings`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `endpoint_model_mappings` (
+CREATE TABLE IF NOT EXISTS `endpoint_model_mappings` (
   `mapping_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `endpoint_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `model_definition_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -222,10 +216,9 @@ UNLOCK TABLES;
 -- Table structure for table `endpoint_tags`
 --
 
-DROP TABLE IF EXISTS `endpoint_tags`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `endpoint_tags` (
+CREATE TABLE IF NOT EXISTS `endpoint_tags` (
   `key` varchar(250) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `value` varchar(5000) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL,
   `endpoint_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -248,10 +241,9 @@ UNLOCK TABLES;
 -- Table structure for table `endpoints`
 --
 
-DROP TABLE IF EXISTS `endpoints`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `endpoints` (
+CREATE TABLE IF NOT EXISTS `endpoints` (
   `endpoint_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL,
   `created_by` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL,
@@ -284,10 +276,9 @@ UNLOCK TABLES;
 -- Table structure for table `entity_associations`
 --
 
-DROP TABLE IF EXISTS `entity_associations`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `entity_associations` (
+CREATE TABLE IF NOT EXISTS `entity_associations` (
   `association_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `source_type` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `source_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -313,10 +304,9 @@ UNLOCK TABLES;
 -- Table structure for table `evaluation_dataset_records`
 --
 
-DROP TABLE IF EXISTS `evaluation_dataset_records`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `evaluation_dataset_records` (
+CREATE TABLE IF NOT EXISTS `evaluation_dataset_records` (
   `dataset_record_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `dataset_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `inputs` json NOT NULL,
@@ -351,10 +341,9 @@ UNLOCK TABLES;
 -- Table structure for table `evaluation_dataset_tags`
 --
 
-DROP TABLE IF EXISTS `evaluation_dataset_tags`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `evaluation_dataset_tags` (
+CREATE TABLE IF NOT EXISTS `evaluation_dataset_tags` (
   `dataset_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `key` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `value` varchar(5000) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL,
@@ -377,10 +366,9 @@ UNLOCK TABLES;
 -- Table structure for table `evaluation_datasets`
 --
 
-DROP TABLE IF EXISTS `evaluation_datasets`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `evaluation_datasets` (
+CREATE TABLE IF NOT EXISTS `evaluation_datasets` (
   `dataset_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `schema` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin,
@@ -411,10 +399,9 @@ UNLOCK TABLES;
 -- Table structure for table `experiment_tags`
 --
 
-DROP TABLE IF EXISTS `experiment_tags`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `experiment_tags` (
+CREATE TABLE IF NOT EXISTS `experiment_tags` (
   `key` varchar(250) COLLATE utf8mb4_0900_bin NOT NULL,
   `value` text COLLATE utf8mb4_0900_bin,
   `experiment_id` int NOT NULL,
@@ -437,10 +424,9 @@ UNLOCK TABLES;
 -- Table structure for table `experiments`
 --
 
-DROP TABLE IF EXISTS `experiments`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `experiments` (
+CREATE TABLE IF NOT EXISTS `experiments` (
   `experiment_id` int NOT NULL AUTO_INCREMENT,
   `name` varchar(256) COLLATE utf8mb4_0900_bin NOT NULL,
   `artifact_location` varchar(256) COLLATE utf8mb4_0900_bin DEFAULT NULL,
@@ -469,10 +455,9 @@ UNLOCK TABLES;
 -- Table structure for table `guardrail_configs`
 --
 
-DROP TABLE IF EXISTS `guardrail_configs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `guardrail_configs` (
+CREATE TABLE IF NOT EXISTS `guardrail_configs` (
   `endpoint_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `guardrail_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `execution_order` int DEFAULT NULL,
@@ -500,10 +485,9 @@ UNLOCK TABLES;
 -- Table structure for table `guardrails`
 --
 
-DROP TABLE IF EXISTS `guardrails`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `guardrails` (
+CREATE TABLE IF NOT EXISTS `guardrails` (
   `guardrail_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `scorer_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -538,10 +522,9 @@ UNLOCK TABLES;
 -- Table structure for table `input_tags`
 --
 
-DROP TABLE IF EXISTS `input_tags`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `input_tags` (
+CREATE TABLE IF NOT EXISTS `input_tags` (
   `input_uuid` varchar(36) COLLATE utf8mb4_0900_bin NOT NULL,
   `name` varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
   `value` varchar(500) COLLATE utf8mb4_0900_bin NOT NULL,
@@ -562,10 +545,9 @@ UNLOCK TABLES;
 -- Table structure for table `inputs`
 --
 
-DROP TABLE IF EXISTS `inputs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `inputs` (
+CREATE TABLE IF NOT EXISTS `inputs` (
   `input_uuid` varchar(36) COLLATE utf8mb4_0900_bin NOT NULL,
   `source_type` varchar(36) COLLATE utf8mb4_0900_bin NOT NULL,
   `source_id` varchar(36) COLLATE utf8mb4_0900_bin NOT NULL,
@@ -591,10 +573,9 @@ UNLOCK TABLES;
 -- Table structure for table `issue_categories`
 --
 
-DROP TABLE IF EXISTS `issue_categories`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `issue_categories` (
+CREATE TABLE IF NOT EXISTS `issue_categories` (
   `issue_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `category_hash` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `category` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -617,10 +598,9 @@ UNLOCK TABLES;
 -- Table structure for table `issues`
 --
 
-DROP TABLE IF EXISTS `issues`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `issues` (
+CREATE TABLE IF NOT EXISTS `issues` (
   `issue_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `experiment_id` int NOT NULL,
   `name` varchar(250) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -660,10 +640,9 @@ UNLOCK TABLES;
 -- Table structure for table `job_locks`
 --
 
-DROP TABLE IF EXISTS `job_locks`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `job_locks` (
+CREATE TABLE IF NOT EXISTS `job_locks` (
   `lock_key` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `job_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `acquired_at` bigint NOT NULL,
@@ -686,10 +665,9 @@ UNLOCK TABLES;
 -- Table structure for table `jobs`
 --
 
-DROP TABLE IF EXISTS `jobs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `jobs` (
+CREATE TABLE IF NOT EXISTS `jobs` (
   `id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `creation_time` bigint NOT NULL,
   `job_name` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -729,10 +707,9 @@ UNLOCK TABLES;
 -- Table structure for table `label_schemas`
 --
 
-DROP TABLE IF EXISTS `label_schemas`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `label_schemas` (
+CREATE TABLE IF NOT EXISTS `label_schemas` (
   `schema_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `experiment_id` int NOT NULL,
   `name` varchar(250) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -765,10 +742,9 @@ UNLOCK TABLES;
 -- Table structure for table `latest_metrics`
 --
 
-DROP TABLE IF EXISTS `latest_metrics`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `latest_metrics` (
+CREATE TABLE IF NOT EXISTS `latest_metrics` (
   `key` varchar(250) COLLATE utf8mb4_0900_bin NOT NULL,
   `value` double NOT NULL,
   `timestamp` bigint DEFAULT NULL,
@@ -795,10 +771,9 @@ UNLOCK TABLES;
 -- Table structure for table `logged_model_metrics`
 --
 
-DROP TABLE IF EXISTS `logged_model_metrics`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `logged_model_metrics` (
+CREATE TABLE IF NOT EXISTS `logged_model_metrics` (
   `model_id` varchar(36) COLLATE utf8mb4_0900_bin NOT NULL,
   `metric_name` varchar(500) COLLATE utf8mb4_0900_bin NOT NULL,
   `metric_timestamp_ms` bigint NOT NULL,
@@ -832,10 +807,9 @@ UNLOCK TABLES;
 -- Table structure for table `logged_model_params`
 --
 
-DROP TABLE IF EXISTS `logged_model_params`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `logged_model_params` (
+CREATE TABLE IF NOT EXISTS `logged_model_params` (
   `model_id` varchar(36) COLLATE utf8mb4_0900_bin NOT NULL,
   `experiment_id` int NOT NULL,
   `param_key` varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
@@ -860,10 +834,9 @@ UNLOCK TABLES;
 -- Table structure for table `logged_model_tags`
 --
 
-DROP TABLE IF EXISTS `logged_model_tags`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `logged_model_tags` (
+CREATE TABLE IF NOT EXISTS `logged_model_tags` (
   `model_id` varchar(36) COLLATE utf8mb4_0900_bin NOT NULL,
   `experiment_id` int NOT NULL,
   `tag_key` varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
@@ -888,10 +861,9 @@ UNLOCK TABLES;
 -- Table structure for table `logged_models`
 --
 
-DROP TABLE IF EXISTS `logged_models`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `logged_models` (
+CREATE TABLE IF NOT EXISTS `logged_models` (
   `model_id` varchar(36) COLLATE utf8mb4_0900_bin NOT NULL,
   `experiment_id` int NOT NULL,
   `name` varchar(500) COLLATE utf8mb4_0900_bin NOT NULL,
@@ -923,10 +895,9 @@ UNLOCK TABLES;
 -- Table structure for table `mcp_access_endpoints`
 --
 
-DROP TABLE IF EXISTS `mcp_access_endpoints`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `mcp_access_endpoints` (
+CREATE TABLE IF NOT EXISTS `mcp_access_endpoints` (
   `id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `workspace` varchar(63) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT 'default',
   `server_name` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -959,10 +930,9 @@ UNLOCK TABLES;
 -- Table structure for table `mcp_server_aliases`
 --
 
-DROP TABLE IF EXISTS `mcp_server_aliases`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `mcp_server_aliases` (
+CREATE TABLE IF NOT EXISTS `mcp_server_aliases` (
   `workspace` varchar(63) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT 'default',
   `name` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `alias` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -985,10 +955,9 @@ UNLOCK TABLES;
 -- Table structure for table `mcp_server_tags`
 --
 
-DROP TABLE IF EXISTS `mcp_server_tags`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `mcp_server_tags` (
+CREATE TABLE IF NOT EXISTS `mcp_server_tags` (
   `workspace` varchar(63) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT 'default',
   `name` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `key` varchar(250) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1011,10 +980,9 @@ UNLOCK TABLES;
 -- Table structure for table `mcp_server_version_tags`
 --
 
-DROP TABLE IF EXISTS `mcp_server_version_tags`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `mcp_server_version_tags` (
+CREATE TABLE IF NOT EXISTS `mcp_server_version_tags` (
   `workspace` varchar(63) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT 'default',
   `name` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `version` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1038,10 +1006,9 @@ UNLOCK TABLES;
 -- Table structure for table `mcp_server_versions`
 --
 
-DROP TABLE IF EXISTS `mcp_server_versions`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `mcp_server_versions` (
+CREATE TABLE IF NOT EXISTS `mcp_server_versions` (
   `workspace` varchar(63) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT 'default',
   `name` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `version` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1077,10 +1044,9 @@ UNLOCK TABLES;
 -- Table structure for table `mcp_servers`
 --
 
-DROP TABLE IF EXISTS `mcp_servers`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `mcp_servers` (
+CREATE TABLE IF NOT EXISTS `mcp_servers` (
   `workspace` varchar(63) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT 'default',
   `name` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `display_name` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL,
@@ -1107,10 +1073,9 @@ UNLOCK TABLES;
 -- Table structure for table `metrics`
 --
 
-DROP TABLE IF EXISTS `metrics`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `metrics` (
+CREATE TABLE IF NOT EXISTS `metrics` (
   `key` varchar(250) COLLATE utf8mb4_0900_bin NOT NULL,
   `value` double NOT NULL,
   `timestamp` bigint NOT NULL,
@@ -1138,10 +1103,9 @@ UNLOCK TABLES;
 -- Table structure for table `model_definitions`
 --
 
-DROP TABLE IF EXISTS `model_definitions`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `model_definitions` (
+CREATE TABLE IF NOT EXISTS `model_definitions` (
   `model_definition_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `secret_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL,
@@ -1174,10 +1138,9 @@ UNLOCK TABLES;
 -- Table structure for table `model_version_tags`
 --
 
-DROP TABLE IF EXISTS `model_version_tags`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `model_version_tags` (
+CREATE TABLE IF NOT EXISTS `model_version_tags` (
   `key` varchar(250) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `value` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin,
   `name` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1202,10 +1165,9 @@ UNLOCK TABLES;
 -- Table structure for table `model_versions`
 --
 
-DROP TABLE IF EXISTS `model_versions`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `model_versions` (
+CREATE TABLE IF NOT EXISTS `model_versions` (
   `name` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `version` int NOT NULL,
   `creation_time` bigint DEFAULT NULL,
@@ -1238,10 +1200,9 @@ UNLOCK TABLES;
 -- Table structure for table `online_scoring_configs`
 --
 
-DROP TABLE IF EXISTS `online_scoring_configs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `online_scoring_configs` (
+CREATE TABLE IF NOT EXISTS `online_scoring_configs` (
   `online_scoring_config_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `scorer_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `sample_rate` double NOT NULL,
@@ -1268,10 +1229,9 @@ UNLOCK TABLES;
 -- Table structure for table `params`
 --
 
-DROP TABLE IF EXISTS `params`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `params` (
+CREATE TABLE IF NOT EXISTS `params` (
   `key` varchar(250) COLLATE utf8mb4_0900_bin NOT NULL,
   `value` varchar(8000) COLLATE utf8mb4_0900_bin NOT NULL,
   `run_uuid` varchar(32) COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1294,10 +1254,9 @@ UNLOCK TABLES;
 -- Table structure for table `registered_model_aliases`
 --
 
-DROP TABLE IF EXISTS `registered_model_aliases`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `registered_model_aliases` (
+CREATE TABLE IF NOT EXISTS `registered_model_aliases` (
   `alias` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `version` int NOT NULL,
   `name` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1320,10 +1279,9 @@ UNLOCK TABLES;
 -- Table structure for table `registered_model_tags`
 --
 
-DROP TABLE IF EXISTS `registered_model_tags`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `registered_model_tags` (
+CREATE TABLE IF NOT EXISTS `registered_model_tags` (
   `key` varchar(250) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `value` varchar(5000) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL,
   `name` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1347,10 +1305,9 @@ UNLOCK TABLES;
 -- Table structure for table `registered_models`
 --
 
-DROP TABLE IF EXISTS `registered_models`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `registered_models` (
+CREATE TABLE IF NOT EXISTS `registered_models` (
   `name` varchar(256) COLLATE utf8mb4_0900_bin NOT NULL,
   `creation_time` bigint DEFAULT NULL,
   `last_updated_time` bigint DEFAULT NULL,
@@ -1374,10 +1331,9 @@ UNLOCK TABLES;
 -- Table structure for table `review_queue_items`
 --
 
-DROP TABLE IF EXISTS `review_queue_items`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `review_queue_items` (
+CREATE TABLE IF NOT EXISTS `review_queue_items` (
   `queue_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `item_type` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `item_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1406,10 +1362,9 @@ UNLOCK TABLES;
 -- Table structure for table `review_queue_label_schemas`
 --
 
-DROP TABLE IF EXISTS `review_queue_label_schemas`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `review_queue_label_schemas` (
+CREATE TABLE IF NOT EXISTS `review_queue_label_schemas` (
   `queue_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `schema_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   PRIMARY KEY (`queue_id`,`schema_id`),
@@ -1431,10 +1386,9 @@ UNLOCK TABLES;
 -- Table structure for table `review_queue_users`
 --
 
-DROP TABLE IF EXISTS `review_queue_users`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `review_queue_users` (
+CREATE TABLE IF NOT EXISTS `review_queue_users` (
   `queue_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `user_id` varchar(250) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   PRIMARY KEY (`queue_id`,`user_id`),
@@ -1456,10 +1410,9 @@ UNLOCK TABLES;
 -- Table structure for table `review_queues`
 --
 
-DROP TABLE IF EXISTS `review_queues`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `review_queues` (
+CREATE TABLE IF NOT EXISTS `review_queues` (
   `queue_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `experiment_id` int NOT NULL,
   `name` varchar(250) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1488,10 +1441,9 @@ UNLOCK TABLES;
 -- Table structure for table `runs`
 --
 
-DROP TABLE IF EXISTS `runs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `runs` (
+CREATE TABLE IF NOT EXISTS `runs` (
   `run_uuid` varchar(32) COLLATE utf8mb4_0900_bin NOT NULL,
   `name` varchar(250) COLLATE utf8mb4_0900_bin DEFAULT NULL,
   `source_type` varchar(20) COLLATE utf8mb4_0900_bin DEFAULT NULL,
@@ -1528,10 +1480,9 @@ UNLOCK TABLES;
 -- Table structure for table `scheduler_leases`
 --
 
-DROP TABLE IF EXISTS `scheduler_leases`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `scheduler_leases` (
+CREATE TABLE IF NOT EXISTS `scheduler_leases` (
   `lease_key` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `acquired_at` bigint NOT NULL,
   `ttl_seconds` int NOT NULL,
@@ -1552,10 +1503,9 @@ UNLOCK TABLES;
 -- Table structure for table `scorer_versions`
 --
 
-DROP TABLE IF EXISTS `scorer_versions`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `scorer_versions` (
+CREATE TABLE IF NOT EXISTS `scorer_versions` (
   `scorer_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `scorer_version` int NOT NULL,
   `serialized_scorer` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1579,10 +1529,9 @@ UNLOCK TABLES;
 -- Table structure for table `scorers`
 --
 
-DROP TABLE IF EXISTS `scorers`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `scorers` (
+CREATE TABLE IF NOT EXISTS `scorers` (
   `experiment_id` int NOT NULL,
   `scorer_name` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `scorer_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1605,10 +1554,9 @@ UNLOCK TABLES;
 -- Table structure for table `secrets`
 --
 
-DROP TABLE IF EXISTS `secrets`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `secrets` (
+CREATE TABLE IF NOT EXISTS `secrets` (
   `secret_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `secret_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `encrypted_value` blob NOT NULL,
@@ -1646,7 +1594,7 @@ UNLOCK TABLES;
 /*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
 /*!50003 SET sql_mode              = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
 DELIMITER ;;
-/*!50003 CREATE*/ /*!50017 DEFINER=`root`@`localhost`*/ /*!50003 TRIGGER `prevent_secrets_aad_mutation` BEFORE UPDATE ON `secrets` FOR EACH ROW BEGIN
+/*!50003 CREATE*/ /*!50017 DEFINER=`root`@`localhost`*/ /*!50003 TRIGGER IF NOT EXISTS `prevent_secrets_aad_mutation` BEFORE UPDATE ON `secrets` FOR EACH ROW BEGIN
     IF NOT (OLD.secret_id <=> NEW.secret_id)
        OR NOT (OLD.secret_name <=> NEW.secret_name)
     THEN
@@ -1664,10 +1612,9 @@ DELIMITER ;
 -- Table structure for table `skill_aliases`
 --
 
-DROP TABLE IF EXISTS `skill_aliases`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `skill_aliases` (
+CREATE TABLE IF NOT EXISTS `skill_aliases` (
   `workspace` varchar(63) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT 'default',
   `organization` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
   `name` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1691,10 +1638,9 @@ UNLOCK TABLES;
 -- Table structure for table `skill_tags`
 --
 
-DROP TABLE IF EXISTS `skill_tags`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `skill_tags` (
+CREATE TABLE IF NOT EXISTS `skill_tags` (
   `workspace` varchar(63) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT 'default',
   `organization` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
   `name` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1718,10 +1664,9 @@ UNLOCK TABLES;
 -- Table structure for table `skill_version_tags`
 --
 
-DROP TABLE IF EXISTS `skill_version_tags`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `skill_version_tags` (
+CREATE TABLE IF NOT EXISTS `skill_version_tags` (
   `workspace` varchar(63) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT 'default',
   `organization` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
   `name` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1746,10 +1691,9 @@ UNLOCK TABLES;
 -- Table structure for table `skill_versions`
 --
 
-DROP TABLE IF EXISTS `skill_versions`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `skill_versions` (
+CREATE TABLE IF NOT EXISTS `skill_versions` (
   `workspace` varchar(63) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT 'default',
   `organization` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
   `name` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1784,10 +1728,9 @@ UNLOCK TABLES;
 -- Table structure for table `skills`
 --
 
-DROP TABLE IF EXISTS `skills`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `skills` (
+CREATE TABLE IF NOT EXISTS `skills` (
   `workspace` varchar(63) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT 'default',
   `organization` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
   `name` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1815,10 +1758,9 @@ UNLOCK TABLES;
 -- Table structure for table `span_metrics`
 --
 
-DROP TABLE IF EXISTS `span_metrics`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `span_metrics` (
+CREATE TABLE IF NOT EXISTS `span_metrics` (
   `trace_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `span_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `key` varchar(250) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1842,10 +1784,9 @@ UNLOCK TABLES;
 -- Table structure for table `spans`
 --
 
-DROP TABLE IF EXISTS `spans`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `spans` (
+CREATE TABLE IF NOT EXISTS `spans` (
   `trace_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `experiment_id` int NOT NULL,
   `span_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -1887,10 +1828,9 @@ UNLOCK TABLES;
 -- Table structure for table `sql_assessment_daily_rollups`
 --
 
-DROP TABLE IF EXISTS `sql_assessment_daily_rollups`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `sql_assessment_daily_rollups` (
+CREATE TABLE IF NOT EXISTS `sql_assessment_daily_rollups` (
   `id` int NOT NULL AUTO_INCREMENT,
   `experiment_id` int NOT NULL,
   `rollup_day` date NOT NULL,
@@ -1918,10 +1858,9 @@ UNLOCK TABLES;
 -- Table structure for table `sql_span_cost_daily_rollups`
 --
 
-DROP TABLE IF EXISTS `sql_span_cost_daily_rollups`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `sql_span_cost_daily_rollups` (
+CREATE TABLE IF NOT EXISTS `sql_span_cost_daily_rollups` (
   `id` int NOT NULL AUTO_INCREMENT,
   `experiment_id` int NOT NULL,
   `rollup_day` date NOT NULL,
@@ -1951,10 +1890,9 @@ UNLOCK TABLES;
 -- Table structure for table `sql_trace_metric_daily_rollups`
 --
 
-DROP TABLE IF EXISTS `sql_trace_metric_daily_rollups`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `sql_trace_metric_daily_rollups` (
+CREATE TABLE IF NOT EXISTS `sql_trace_metric_daily_rollups` (
   `id` int NOT NULL AUTO_INCREMENT,
   `experiment_id` int NOT NULL,
   `rollup_day` date NOT NULL,
@@ -1986,10 +1924,9 @@ UNLOCK TABLES;
 -- Table structure for table `sql_trace_rollup_rebuild_queue`
 --
 
-DROP TABLE IF EXISTS `sql_trace_rollup_rebuild_queue`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `sql_trace_rollup_rebuild_queue` (
+CREATE TABLE IF NOT EXISTS `sql_trace_rollup_rebuild_queue` (
   `experiment_id` int NOT NULL,
   `rollup_day` date NOT NULL,
   `rollup_family` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -2010,10 +1947,9 @@ UNLOCK TABLES;
 -- Table structure for table `tags`
 --
 
-DROP TABLE IF EXISTS `tags`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `tags` (
+CREATE TABLE IF NOT EXISTS `tags` (
   `key` varchar(250) COLLATE utf8mb4_0900_bin NOT NULL,
   `value` varchar(8000) COLLATE utf8mb4_0900_bin DEFAULT NULL,
   `run_uuid` varchar(32) COLLATE utf8mb4_0900_bin NOT NULL,
@@ -2036,10 +1972,9 @@ UNLOCK TABLES;
 -- Table structure for table `trace_info`
 --
 
-DROP TABLE IF EXISTS `trace_info`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `trace_info` (
+CREATE TABLE IF NOT EXISTS `trace_info` (
   `request_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `experiment_id` int NOT NULL,
   `timestamp_ms` bigint NOT NULL,
@@ -2081,10 +2016,9 @@ UNLOCK TABLES;
 -- Table structure for table `trace_metrics`
 --
 
-DROP TABLE IF EXISTS `trace_metrics`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `trace_metrics` (
+CREATE TABLE IF NOT EXISTS `trace_metrics` (
   `request_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `key` varchar(250) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `value` double DEFAULT NULL,
@@ -2107,10 +2041,9 @@ UNLOCK TABLES;
 -- Table structure for table `trace_request_metadata`
 --
 
-DROP TABLE IF EXISTS `trace_request_metadata`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `trace_request_metadata` (
+CREATE TABLE IF NOT EXISTS `trace_request_metadata` (
   `key` varchar(250) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `value` varchar(8000) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL,
   `request_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -2133,10 +2066,9 @@ UNLOCK TABLES;
 -- Table structure for table `trace_tags`
 --
 
-DROP TABLE IF EXISTS `trace_tags`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `trace_tags` (
+CREATE TABLE IF NOT EXISTS `trace_tags` (
   `key` varchar(250) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `value` varchar(8000) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL,
   `request_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -2159,10 +2091,9 @@ UNLOCK TABLES;
 -- Table structure for table `webhook_events`
 --
 
-DROP TABLE IF EXISTS `webhook_events`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `webhook_events` (
+CREATE TABLE IF NOT EXISTS `webhook_events` (
   `webhook_id` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `entity` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `action` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
@@ -2187,10 +2118,9 @@ UNLOCK TABLES;
 -- Table structure for table `webhooks`
 --
 
-DROP TABLE IF EXISTS `webhooks`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `webhooks` (
+CREATE TABLE IF NOT EXISTS `webhooks` (
   `webhook_id` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `name` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
   `description` varchar(1000) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL,
@@ -2221,10 +2151,9 @@ UNLOCK TABLES;
 -- Table structure for table `workspaces`
 --
 
-DROP TABLE IF EXISTS `workspaces`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
-CREATE TABLE `workspaces` (
+CREATE TABLE IF NOT EXISTS `workspaces` (
   `name` varchar(63) COLLATE utf8mb4_0900_bin NOT NULL,
   `description` text COLLATE utf8mb4_0900_bin,
   `default_artifact_root` text COLLATE utf8mb4_0900_bin,
