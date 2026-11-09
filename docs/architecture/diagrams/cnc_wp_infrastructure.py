@@ -1,3 +1,6 @@
+import base64
+import mimetypes
+import re
 from pathlib import Path
 
 from diagrams import Cluster, Diagram, Edge
@@ -9,10 +12,98 @@ from diagrams.onprem.client import User
 from diagrams.onprem.network import Internet
 
 
-OUTPUT_DIR = Path("docs/architecture/images")
+# ============================================================
+# Output path
+# ============================================================
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
+
+OUTPUT_DIR = PROJECT_ROOT / "docs" / "architecture" / "images"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUTPUT_FILE = OUTPUT_DIR / "cnc_wp_infrastructure"
+OUTPUT_NAME = "cnc_wp_infrastructure"
+OUTPUT_PATH = OUTPUT_DIR / OUTPUT_NAME
+
+
+# ============================================================
+# SVG post-processing
+# ============================================================
+
+def embed_svg_images(svg_path: Path) -> None:
+    """
+    Graphviz/Diagrams가 SVG 내부에 로컬 파일 경로로 기록한
+    PNG 아이콘을 Base64 Data URI로 변환한다.
+
+    이를 통해 GitHub나 다른 PC에서 SVG를 열어도
+    로컬 .venv 경로에 의존하지 않고 아이콘을 표시할 수 있다.
+    """
+
+    if not svg_path.exists():
+        print(f"[WARN] SVG not found: {svg_path}")
+        return
+
+    content = svg_path.read_text(encoding="utf-8")
+
+    # Graphviz가 생성하는:
+    # xlink:href="C:\\...\\icon.png"
+    # href="C:\\...\\icon.png"
+    # 두 형식을 모두 지원
+    pattern = r'(?:xlink:href|href)="([^"]+)"'
+
+    embedded_count = 0
+
+    def replace_href(match):
+        nonlocal embedded_count
+
+        full_match = match.group(0)
+        href = match.group(1)
+
+        # 이미 Base64로 변환된 경우 그대로 유지
+        if href.startswith("data:"):
+            return full_match
+
+        image_path = Path(href)
+
+        # 실제 로컬 파일이 아닌 경우 그대로 유지
+        if not image_path.exists():
+            return full_match
+
+        mime_type, _ = mimetypes.guess_type(image_path.name)
+
+        if mime_type is None:
+            mime_type = "image/png"
+
+        encoded = base64.b64encode(
+            image_path.read_bytes()
+        ).decode("ascii")
+
+        embedded_count += 1
+
+        # 기존 SVG의 attribute 이름 유지
+        attribute_name = full_match.split("=", 1)[0]
+
+        return (
+            f'{attribute_name}="'
+            f'data:{mime_type};base64,{encoded}"'
+        )
+
+    updated = re.sub(pattern, replace_href, content)
+
+    svg_path.write_text(
+        updated,
+        encoding="utf-8"
+    )
+
+    print(
+        f"[OK] Embedded {embedded_count} SVG image(s): "
+        f"{svg_path}"
+    )
+
+
+# ============================================================
+# Graph style
+# ============================================================
 
 graph_attr = {
     "fontsize": "18",
@@ -21,19 +112,39 @@ graph_attr = {
     "ranksep": "1.0",
 }
 
+
+# ============================================================
+# Infrastructure diagram
+# ============================================================
+
 with Diagram(
     "CNC WearPoint - NHN Cloud Infrastructure",
-    filename=str(OUTPUT_FILE),
+    filename=str(OUTPUT_PATH),
     outformat=["png", "svg"],
     show=False,
     direction="LR",
     graph_attr=graph_attr,
 ):
-    team = User("Development Team")
-    internet = Internet("Internet")
 
-    floating_ip = Router("Floating IP")
-    igw = Router("cnc-wp-igw")
+    # --------------------------------------------------------
+    # External
+    # --------------------------------------------------------
+
+    team = User(
+        "Development Team"
+    )
+
+    internet = Internet(
+        "Internet"
+    )
+
+    floating_ip = Router(
+        "Floating IP"
+    )
+
+    igw = Router(
+        "cnc-wp-igw"
+    )
 
     object_storage = Storage(
         "Object Storage\n"
@@ -41,13 +152,25 @@ with Diagram(
         "(Planned)"
     )
 
-    with Cluster("NHN Cloud - cnc-wp-vpc\n10.60.0.0/20"):
+    # --------------------------------------------------------
+    # NHN Cloud VPC
+    # --------------------------------------------------------
+
+    with Cluster(
+        "NHN Cloud - cnc-wp-vpc\n"
+        "10.60.0.0/20"
+    ):
+
+        # ----------------------------------------------------
+        # Application network
+        # ----------------------------------------------------
 
         with Cluster(
             "App Network\n"
             "cnc-wp-app-private\n"
             "10.60.0.64/27"
         ):
+
             app_sg = Firewall(
                 "cnc-wp-app-sg\n"
                 "SSH 22\n"
@@ -64,15 +187,20 @@ with Diagram(
 
             app_rt = Router(
                 "cnc-wp-app-rt\n"
-                "10.60.0.0/20 → local\n"
-                "0.0.0.0/0 → IGW"
+                "10.60.0.0/20 -> local\n"
+                "0.0.0.0/0 -> IGW"
             )
+
+        # ----------------------------------------------------
+        # Database network
+        # ----------------------------------------------------
 
         with Cluster(
             "Database Network\n"
             "cnc-wp-db-private\n"
             "10.60.0.32/28"
         ):
+
             db_sg = Firewall(
                 "cnc-wp-db-sg\n"
                 "DB Port\n"
@@ -89,11 +217,18 @@ with Diagram(
             private_rt = Router(
                 "cnc-wp-private-rt\n"
                 "Default Route Table\n"
-                "10.60.0.0/20 → local\n"
+                "10.60.0.0/20 -> local\n"
                 "No IGW"
             )
 
-        with Cluster("Future Expansion"):
+        # ----------------------------------------------------
+        # Future expansion
+        # ----------------------------------------------------
+
+        with Cluster(
+            "Future Expansion"
+        ):
+
             gpu_vm = Ubuntu(
                 "GPU Integration Server\n"
                 "T4 GPU\n"
@@ -112,31 +247,57 @@ with Diagram(
                 "(Planned)"
             )
 
-    team >> Edge(label="SSH 22") >> internet
+    # ========================================================
+    # Network flows
+    # ========================================================
+
+    # Development team -> App VM SSH access
+    team >> Edge(
+        label="SSH 22"
+    ) >> internet
+
     internet >> floating_ip >> app_sg >> app_vm
 
+    # App subnet -> Internet Gateway
     app_vm >> app_rt >> igw >> internet
 
-    app_vm >> Edge(label="MySQL DB Port") >> db_sg >> rds
+    # App -> RDS internal connection
+    app_vm >> Edge(
+        label="MySQL DB Port"
+    ) >> db_sg >> rds
 
+    # RDS uses private routing only
     rds - Edge(
         label="Private only",
         style="dashed"
     ) - private_rt
 
+    # Future Object Storage
     app_vm >> Edge(
         label="Images / Artifacts",
         style="dashed"
     ) >> object_storage
 
+    # Future GPU inference integration
     app_vm >> Edge(
         label="Future internal API",
         style="dashed"
     ) >> gpu_vm
 
+    # Future NKS migration
     app_vm >> Edge(
         label="Future migration",
         style="dashed"
     ) >> nks
 
+    # Future monitoring
     nks >> monitoring
+
+
+# ============================================================
+# Post-process SVG
+# ============================================================
+
+SVG_FILE = OUTPUT_DIR / f"{OUTPUT_NAME}.svg"
+
+embed_svg_images(SVG_FILE)
