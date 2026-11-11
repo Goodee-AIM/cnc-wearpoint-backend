@@ -255,7 +255,8 @@ def test_sensor_duration_matches_frontend_millisecond_precision(tmp_path):
     path = tmp_path / "sensor.csv"
     path.write_text(
         "\ufeff1,2,3,4,5,2023-01-01 23:59:59.999900000\n"
-        "1,2,3,4,5,2023-01-02 00:00:00.020100000\n"
+        "1,2,3,4,5,2023-01-02 00:00:00.020100000\n",
+        encoding="utf-8",
     )
     assert sensor_duration(path) == 21
 
