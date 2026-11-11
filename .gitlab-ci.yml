@@ -1,0 +1,35 @@
+stages:
+  - image
+  - promote
+
+default:
+  tags:
+    - cnc-wp-runner
+
+variables:
+  IMAGE_REPO: "quay.io/melona240/cnc-wearpoint-backend"
+
+# main 커밋 기준 Docker 이미지 1회 빌드 및 SHA 태그 Push
+build_image:
+  stage: image
+  script:
+    - echo "$QUAY_TOKEN" | docker login quay.io -u "$QUAY_USERNAME" --password-stdin
+    - docker build -t "$IMAGE_REPO:$CI_COMMIT_SHA" .
+    - docker push "$IMAGE_REPO:$CI_COMMIT_SHA"
+    - docker logout quay.io
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+# 검증된 SHA 이미지를 버전 태그와 latest로 승격
+promote_image:
+  stage: promote
+  script:
+    - echo "$QUAY_TOKEN" | docker login quay.io -u "$QUAY_USERNAME" --password-stdin
+    - docker pull "$IMAGE_REPO:$CI_COMMIT_SHA"
+    - docker tag "$IMAGE_REPO:$CI_COMMIT_SHA" "$IMAGE_REPO:$CI_COMMIT_TAG"
+    - docker tag "$IMAGE_REPO:$CI_COMMIT_SHA" "$IMAGE_REPO:latest"
+    - docker push "$IMAGE_REPO:$CI_COMMIT_TAG"
+    - docker push "$IMAGE_REPO:latest"
+    - docker logout quay.io
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
