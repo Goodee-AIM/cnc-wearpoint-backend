@@ -6,6 +6,12 @@ React 기반 프론트엔드와 FastAPI를 연동하고, MySQL을 이용해 가�
 
 현재 로컬 개발 환경을 기반으로 기능을 검증하고 있으며, NHN Cloud 환경에서는 App 서버와 RDS를 분리한 인프라 구성을 진행하고 있습니다.
 
+## 전체 아키텍처 개요
+
+![CNC WearPoint MLOps 아키텍처 및 CI/CD 흐름](docs/architecture/images/cnc_wp_mlops_architecture.png)
+
+위 그림은 서비스와 MLOps의 전체 목표 구조를 보여줍니다. 아래 개발 상태와 CI/CD 설명은 현재 이 저장소에서 확인되는 **백엔드 구현 및 배포 설정**을 기준으로 합니다. 그림의 프론트엔드 배포와 MLflow 모델 운영 흐름은 현재 백엔드 CI/CD의 완료 항목으로 표시하지 않습니다.
+
 ## 관련 문서
 
 프로젝트의 세부 설계와 운영 관련 내용은 목적에 따라 별도 문서로 관리합니다.
@@ -342,7 +348,20 @@ RDS는 외부 인터넷에 직접 노출하지 않고 Private Network에 배치�
 
 ---
 
-## 9. 개발 상태
+## 9. 백엔드 CI/CD
+
+GitHub의 `main` 브랜치 또는 `v*` 태그를 push하면 [GitHub Actions](.github/workflows/sync-to-gitlab.yml)가 해당 브랜치나 태그를 GitLab 저장소에 동기화합니다. 이후 [GitLab CI](.gitlab-ci.yml)가 `cnc-wp-runner`에서 백엔드 이미지 빌드와 배포 작업을 실행하도록 구성되어 있습니다.
+
+| 트리거 | GitLab CI 동작 |
+|---|---|
+| `main` 커밋 | Docker 이미지를 한 번 빌드하고 커밋 SHA 태그로 Quay.io에 게시 |
+| `vX.Y.Z` 태그 | 해당 커밋의 SHA 이미지를 버전 태그와 `latest`로 승격하고, 승인된 버전 이미지를 운영 VM에 배포 |
+
+운영 배포 단계는 Docker Compose로 백엔드 컨테이너를 갱신한 뒤 로컬 `/health`, 외부 HTTPS `/health`, `/api/sets` 응답을 확인하도록 설정되어 있습니다. 로컬 `pytest` 실행 방법은 [자동 테스트](#5-자동-테스트)에 있으며, 현재 GitLab CI 단계에는 자동 테스트가 포함되어 있지 않습니다. 배포 성공 및 운영 환경 검증 완료 여부는 실제 파이프라인 실행 결과로 확인해야 합니다.
+
+---
+
+## 10. 개발 상태
 
 현재 프로젝트의 주요 진행 상태는 다음과 같습니다.
 
@@ -362,6 +381,8 @@ RDS는 외부 인터넷에 직접 노출하지 않고 Private Network에 배치�
 - MLflow Metadata MySQL Schema 구조 검증
 - NHN Cloud VPC 및 App / Database Network 설계
 - NHN Cloud App VM 및 RDS 기반 인프라 구성
+- GitHub Actions를 통한 백엔드 소스의 GitLab 동기화 설정
+- GitLab CI의 Quay.io 이미지 빌드·승격 및 운영 VM 배포 단계 구성
 
 ### 진행 예정
 
@@ -369,11 +390,11 @@ RDS는 외부 인터넷에 직접 노출하지 않고 Private Network에 배치�
 - 로컬 서비스 DB의 RDS 이전
 - MLflow Backend Store의 MySQL / RDS 연동 검증
 - AI 모델과 FastAPI Prediction API 직접 연동
-- 실제 서비스 배포 및 운영 환경 검증
+- 운영 배포 파이프라인 실행 결과 및 서비스 환경 검증
 
 ---
 
-## 10. 프로젝트 문서 구조
+## 11. 프로젝트 문서 구조
 
 ```text
 docs/
@@ -387,7 +408,8 @@ docs/
 │   ├── diagrams/
 │   │   └── 인프라 구성도 생성 코드
 │   └── images/
-│       └── 인프라 구성도
+│       ├── 인프라 구성도
+│       └── cnc_wp_mlops_architecture.png  # 전체 MLOps 아키텍처 개요
 │
 └── deployment/
     └── infrastructure.md
