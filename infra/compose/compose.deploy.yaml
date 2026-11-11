@@ -1,0 +1,33 @@
+services:
+  backend:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - mysql
+    environment:
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:?Required}
+      DB_USER: ${DB_USER:?Required}
+      DB_PASSWORD: ${DB_PASSWORD:?Required}
+      LOCAL_STORAGE_ROOT: /data
+    volumes:
+      - type: bind
+        source: ${CNC_DATA_DIR:?Required}
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false
+
+  frontend:
+    image: nginx:alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${CNC_WEB_BIND:-127.0.0.1}:${CNC_WEB_PORT:-8080}:80"
+    volumes:
+      - ../../../matwi-frontend/dist:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro

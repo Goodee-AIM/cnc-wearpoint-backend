@@ -4,6 +4,11 @@ CNC 공구 마모 진단 서비스의 FastAPI 백엔드입니다.
 
 React ↔ FastAPI 통신과 MySQL 기반 Set·측정·최신 예측 조회를 제공하는 초기 개발 단계입니다.
 
+관련 문서:
+
+- [데이터베이스 구성 및 이전 가이드](docs/database.md): CNC·MLflow SQL 파일과 검증·이관 현황
+- [인프라 구성 안내](docs/deployment/infrastructure.md): Docker Compose 경로와 실행 방법
+
 ## 1. 개발 환경
 
 - Python 3.12.10
@@ -90,7 +95,7 @@ uv run python -m uvicorn app.main:app --reload
 
 ### Set·측정 응답 필드
 
-DB 구조는 `sql/schema.sql`을 기준으로 합니다. 스키마 파일은 신규 DB 초기화용이며, 이미 존재하는 DB의 컬럼을 자동으로 변경하지 않습니다.
+DB 구조는 [sql/cnc/schema.sql](sql/cnc/schema.sql)을 기준으로 합니다. 스키마 파일은 신규 DB 초기화용이며, 이미 존재하는 DB의 컬럼을 자동으로 변경하지 않습니다.
 
 - Set 목록의 내부 기본키는 `set_id`이고, URL의 `set_number`는 원본 데이터셋 번호(4~11)입니다.
 - 측정 응답은 `image_id`, `sensor_id`, `original_wear_um`, `original_type`을 사용합니다. 이전 `source_image_id`, `source_sensor_id`, `actual_wear_um`, `actual_type` 이름은 사용하지 않습니다.

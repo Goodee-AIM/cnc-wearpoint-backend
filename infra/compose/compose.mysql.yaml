@@ -1,0 +1,23 @@
+# 로컬 개발용 MySQL 8.4: CNC 서비스 DB 초기화 및 데이터 볼륨 관리
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: cnc-wearpoint-mysql
+    restart: unless-stopped # 자동재시작 (수동중지제외)
+
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Required}
+      MYSQL_DATABASE: ${DB_NAME:?Required}
+      MYSQL_USER: ${DB_USER:?Required}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Required}
+
+    ports:
+      - "127.0.0.1:3306:3306"
+
+    # 폴더 경로 확인
+    volumes:
+      - mysql_data:/var/lib/mysql
+      # - ./sql/cnc/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../../sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+volumes:
+  mysql_data:
