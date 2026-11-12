@@ -348,3 +348,73 @@ def test_reset_without_schedule_has_empty_counts_and_first_start_keeps_new_sessi
         assert reset["session_id"]
         assert client.get("/api/monitoring/alerts").json()["total"] == 0
         assert monitoring.start()["session_id"] == reset["session_id"]
+
+
+def test_page_counts_are_global_and_filters_apply_to_all_session_events(populated):
+    _, clock = populated
+    monitoring.start()
+    clock[0] += timedelta(seconds=11)
+    monitoring_alerts.process_due_alerts()
+    with TestClient(app) as client:
+        page = client.get('/api/monitoring/alerts', params={'set_number': 4, 'level': 'danger', 'limit': 1}).json()
+        assert page['total'] == page['current_total'] == 3
+        assert page['filtered_total'] == 1
+        assert len(page['items']) == 1
+        assert page['items'][0]['set_number'] == 4
+        assert page['items'][0]['level'] == 'danger'
+        empty = client.get('/api/monitoring/alerts?set_number=5').json()
+        assert empty['total'] == 3 and empty['filtered_total'] == 0
+        assert empty['items'] == []
+
+
+def test_confirmation_filter_and_live_counts_do_not_depend_on_page_size(populated):
+    monitoring.start()
+    with TestClient(app) as client:
+        feed = client.get('/api/monitoring/alerts').json()
+        event = next(row for row in feed['items'] if row['can_acknowledge'])
+        client.patch(f"/api/monitoring/alerts/{event['id']}/acknowledge")
+        read = client.get('/api/monitoring/alerts?read_status=read&limit=1').json()
+        unread = client.get('/api/monitoring/alerts?read_status=unread&limit=1').json()
+        assert read['current_total'] == unread['current_total'] == 2
+        assert read['current_unread'] == unread['current_unread'] == 1
+        assert read['filtered_total'] == unread['filtered_total'] == 1
+        assert read['items'][0]['detail_confirmed_at'] is not None
+        assert unread['items'][0]['detail_confirmed_at'] is None
+
+
+def test_pinned_pages_keep_membership_while_header_reports_live_counts(populated):
+    _, clock = populated
+    monitoring.start()
+    with TestClient(app) as client:
+        first = client.get('/api/monitoring/alerts?limit=1').json()
+        clock[0] += timedelta(seconds=11)
+        monitoring_alerts.process_due_alerts()
+        second = client.get('/api/monitoring/alerts', params={
+            'limit': 1, 'offset': 1, 'session_id': first['session_id'], 'event_max_id': first['event_max_id'],
+        }).json()
+        assert second['total'] == second['filtered_total'] == 2
+        assert second['current_total'] == 3
+        assert second['items'][0]['id'] != first['items'][0]['id']
+
+
+def test_large_history_returns_only_requested_page(populated):
+    _, clock = populated
+    monitoring.start()
+    clock[0] += timedelta(seconds=3001)
+    monitoring_alerts.process_due_alerts()
+    with TestClient(app) as client:
+        first = client.get('/api/monitoring/alerts?limit=50').json()
+        second = client.get('/api/monitoring/alerts', params={
+            'limit': 50, 'offset': 50, 'session_id': first['session_id'], 'event_max_id': first['event_max_id'],
+        }).json()
+        assert first['current_total'] > 300
+        assert len(first['items']) == len(second['items']) == 50
+        assert {row['id'] for row in first['items']}.isdisjoint(row['id'] for row in second['items'])
+        ids = [int(row['id'].split(':')[1]) for row in first['items']]
+        assert ids[0] > ids[-1]
+
+
+@pytest.mark.parametrize('query', ['set_number=3', 'set_number=12', 'level=invalid', 'read_status=invalid'])
+def test_invalid_history_filters_are_rejected(populated, query):
+    with TestClient(app) as client:
+        assert client.get('/api/monitoring/alerts?' + query).status_code == 422

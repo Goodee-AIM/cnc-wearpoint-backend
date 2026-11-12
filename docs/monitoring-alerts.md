@@ -167,3 +167,14 @@ Remove-Item Env:CNC_TEST_MYSQL_COLLATIONS
 수정 환경에서는 일반 테스트 48개가 통과했고 실제 MySQL 검사는 실행하지 못했습니다.
 
 후속 페이지는 첫 응답의 session_id와 event_max_id를 전달합니다. 페이지 조회 도중 reset으로 세션이 바뀌면 409를 반환하므로 첫 페이지부터 다시 조회합니다. 프런트 자동 갱신은 약 5초 간격입니다. 스키마와 기존 데이터 변경은 필요하지 않습니다.
+
+### 페이지 조회와 집계
+
+`GET /api/monitoring/alerts?limit=50&offset=0`으로 한 페이지를 조회합니다. 선택 인자 `set_number`(4~11), `level`(warning/danger), `read_status`(all/read/unread)는 서버에서 필터링합니다.
+
+- `total`, `unread`: `event_max_id` 상한 내 현재 세션 건수. 기존 클라이언트와 호환됩니다.
+- `current_total`, `current_unread`: ID 상한·필터와 관계없이 현재 세션 전체의 최신 건수입니다.
+- `filtered_total`: ID 상한 내 필터에 맞는 건수입니다. 페이지 수 계산에 사용합니다.
+- `items`: 요청한 페이지의 행입니다. 예측 결과 JOIN 전에 대상 페이지를 먼저 선택합니다.
+
+후속 페이지는 `session_id`, `event_max_id`를 유지합니다. Set·단계 필터는 삽입에 따른 페이지 이동을 방지하고, 확인 상태 필터는 확인 처리에 따라 결과가 달라질 수 있습니다. reset 시 409를 반환합니다. 기존 데이터 삭제나 스키마 변경은 없습니다.

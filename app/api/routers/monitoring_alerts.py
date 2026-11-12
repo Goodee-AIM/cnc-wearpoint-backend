@@ -1,6 +1,7 @@
 """현재 재생 세션의 알림 이력을 집계하고 발생 건별 확인을 기록합니다."""
 import os
 import re
+from typing import Literal
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Path, Query
@@ -91,9 +92,11 @@ def list_shared_alerts(
     event_max_id: int | None = Query(None, ge=0),
     legacy_max_id: int | None = Query(None, ge=0),
     session_id: str | None = Query(None),
+    set_number: int | None = Query(None, ge=4, le=11),
+    level: Literal["warning", "danger"] | None = Query(None),
+    read_status: Literal["all", "read", "unread"] = Query("all"),
 ):
     with monitoring_cursor() as cursor:
-        # 상태 행을 읽는 동안 reset이 끼어들지 않게 하고, 모든 브라우저가 같은 세션을 집계합니다.
         current_session = read_state(cursor)["session_id"]
         if session_id is not None and session_id != current_session:
             raise HTTPException(409, "재생 세션이 초기화됐습니다. 첫 페이지부터 다시 조회하세요.")
@@ -103,24 +106,47 @@ def list_shared_alerts(
                 FROM monitoring_alert_events WHERE session_id = %s
             """, (current_session,))
             event_max_id = cursor.fetchone()["event_max_id"]
-        # 기존 클라이언트의 페이지 인자는 유지하되, 세션 없는 legacy 이력은 현재 집계에서 제외합니다.
-        legacy_max_id = 0
-        parameters = (event_max_id, current_session, 0, 0, legacy_max_id)
+        # 이전 클라이언트의 total/unread는 고정 ID 상한을 유지합니다.
+        # 새 화면의 상단 건수는 current_total/current_unread로 최신 세션 전체를 표시합니다.
         cursor.execute("""
-            SELECT COUNT(*) AS total,
-                   COALESCE(SUM(CASE WHEN detail_confirmed_at IS NULL THEN 1 ELSE 0 END),0) AS unread
-            FROM monitoring_alert_events WHERE session_id = %s AND id <= %s
-        """, (current_session, event_max_id))
+            SELECT COALESCE(SUM(CASE WHEN id <= %s THEN 1 ELSE 0 END),0) AS total,
+                   COALESCE(SUM(CASE WHEN id <= %s AND detail_confirmed_at IS NULL THEN 1 ELSE 0 END),0) AS unread,
+                   COUNT(*) AS current_total,
+                   COALESCE(SUM(CASE WHEN detail_confirmed_at IS NULL THEN 1 ELSE 0 END),0) AS current_unread
+            FROM monitoring_alert_events WHERE session_id = %s
+        """, (event_max_id, event_max_id, current_session))
         counts = {key: int(value) for key, value in cursor.fetchone().items()}
-        cursor.execute(f"""
-            SELECT * FROM ({FEED_SQL}) AS history
-            ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s
-        """, (*parameters, limit, offset))
+        clauses = ["session_id = %s", "id <= %s"]
+        parameters = [current_session, event_max_id]
+        if set_number is not None:
+            clauses.append("set_number = %s")
+            parameters.append(set_number)
+        if level is not None:
+            clauses.append("level = %s")
+            parameters.append(level)
+        if read_status != "all":
+            clauses.append("detail_confirmed_at IS " + ("NULL" if read_status == "unread" else "NOT NULL"))
+        where = " AND ".join(clauses)
+        if set_number is None and level is None and read_status == "all":
+            filtered_total = counts["total"]
+        else:
+            cursor.execute(f"SELECT COUNT(*) AS total FROM monitoring_alert_events WHERE {where}", tuple(parameters))
+            filtered_total = int(cursor.fetchone()["total"])
+        # 대상 페이지를 먼저 고르고, 예측값 JOIN은 필요한 행에만 수행합니다.
+        event_sql = FEED_SQL.split("UNION ALL", 1)[0]
+        event_sql = event_sql.replace("FROM monitoring_alert_events AS e", f"""
+            FROM (
+                SELECT * FROM monitoring_alert_events WHERE {where}
+                ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s
+            ) AS e
+        """).replace("WHERE e.id <= %s AND e.session_id = %s", "")
+        cursor.execute(event_sql + " ORDER BY e.created_at DESC, e.id DESC", (*parameters, limit, offset))
         items = [utc_times(row) for row in cursor.fetchall()]
         for row in items:
             row["can_acknowledge"] = row["prediction_id"] is not None
         return {
-            **counts, "event_max_id": event_max_id, "legacy_max_id": legacy_max_id,
+            **counts, "filtered_total": filtered_total,
+            "event_max_id": event_max_id, "legacy_max_id": 0,
             "session_id": current_session, "items": items,
         }
 
