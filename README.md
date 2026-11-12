@@ -4,25 +4,39 @@ CNC 가공 과정에서 수집한 이미지·센서 데이터와 AI 모델의 �
 
 React 기반 프론트엔드와 FastAPI를 연동하고, MySQL을 이용해 가공 조건, 측정 데이터, 실제 마모값 및 AI 모델의 최신 예측 결과를 관리합니다.
 
-현재 로컬 개발 환경을 기반으로 기능을 검증하고 있으며, NHN Cloud 환경에서는 App 서버와 RDS를 분리한 인프라 구성을 진행하고 있습니다.
+현재 NHN Cloud 환경에 App VM과 RDS를 분리하여 운영 환경을 구성했으며, 서비스 Database와 MLflow Tracking / Registry Metadata를 NHN Cloud RDS for MySQL로 관리하고 있습니다.
+
+MLflow는 App VM에서 별도 Tracking Server로 실행하며, Basic Auth를 적용하여 인증된 사용자만 접근할 수 있도록 구성했습니다.
+
+---
 
 ## 전체 아키텍처 개요
 
 ![CNC WearPoint MLOps 아키텍처 및 CI/CD 흐름](docs/architecture/images/cnc_wp_mlops_architecture.png)
 
-위 그림은 서비스와 MLOps의 전체 목표 구조를 보여줍니다. 아래 개발 상태와 CI/CD 설명은 현재 이 저장소에서 확인되는 **백엔드 구현 및 배포 설정**을 기준으로 합니다. 그림의 프론트엔드 배포와 MLflow 모델 운영 흐름은 현재 백엔드 CI/CD의 완료 항목으로 표시하지 않습니다.
+위 그림은 GitHub 기반 소스 관리부터 GitLab CI/CD, Quay.io 이미지 관리, NHN Cloud 서비스 운영 및 MLflow 모델 관리까지의 전체 구조를 보여줍니다.
+
+GitHub는 팀의 메인 소스 저장소로 사용하며, GitHub Actions는 GitHub의 `main` 브랜치와 Version Tag를 GitLab으로 동기화하는 역할을 담당합니다.
+
+실제 Container Image Build, Version 승격 및 운영 배포는 GitLab CI와 GitLab Runner를 통해 수행합니다.
+
+운영 환경에서는 Nginx를 HTTPS 단일 진입점으로 사용하여 요청 경로에 따라 Frontend, FastAPI Backend, MLflow Tracking Server로 요청을 분기합니다.
+
+AI 모델과 FastAPI Prediction API의 직접 연동 및 NHN Cloud Object Storage 기반 파일·MLflow Artifact 관리는 후속 단계로 진행합니다.
+
+---
 
 ## 관련 문서
 
 프로젝트의 세부 설계와 운영 관련 내용은 목적에 따라 별도 문서로 관리합니다.
 
-- [클라우드 인프라 구성](docs/infrastructure.md)
-  NHN Cloud VPC, Subnet, Routing, Security Group, App VM 및 RDS 구성
+- [클라우드 인프라 구성](docs/infrastructure.md)  
+  NHN Cloud VPC, Subnet, Routing, Security Group, App VM, RDS 및 서비스 접근 구조
 
-- [데이터베이스 구성 및 이전 가이드](docs/database.md)
-  CNC WearPoint 서비스 DB와 MLflow 메타데이터 DB의 구조, 검증 및 RDS 이전 현황
+- [데이터베이스 구성 및 이전 가이드](docs/database.md)  
+  CNC WearPoint 서비스 DB와 MLflow Tracking / Auth DB의 구조, 검증 및 RDS 이전 현황
 
-- [로컬 배포 및 인프라 파일 구성 안내](docs/deployment/infrastructure.md)
+- [로컬 배포 및 인프라 파일 구성 안내](docs/deployment/infrastructure.md)  
   Docker Compose 실행 방법과 배포 관련 파일 구조
 
 ---
@@ -39,6 +53,10 @@ React 기반 프론트엔드와 FastAPI를 연동하고, MySQL을 이용해 가�
 | Package Manager | uv |
 | Container | Docker |
 | API Documentation | Swagger |
+| ML Experiment Tracking | MLflow 3.18.0 |
+| Cloud | NHN Cloud |
+| CI/CD | GitHub Actions + GitLab CI/CD |
+| Container Registry | Quay.io |
 
 ### 사전 준비
 
@@ -269,7 +287,9 @@ docker run --rm --env-file .env -p 127.0.0.1:8000:8000 cnc-wearpoint-backend:dev
 | Tag | 용도 |
 |---|---|
 | `dev` | 로컬 개발 및 테스트 |
-| `v0.x` | 기능 검증 후 공유하는 Version |
+| Commit SHA | CI/CD Build 결과 식별 |
+| `vX.Y.Z` | 운영 배포 Version |
+| `latest` | 승인된 최신 운영 이미지 |
 
 기존 검증 이미지:
 
@@ -277,7 +297,7 @@ docker run --rm --env-file .env -p 127.0.0.1:8000:8000 cnc-wearpoint-backend:dev
 quay.io/melona240/cnc-wearpoint-backend:v0.2
 ```
 
-Docker 이미지는 기능 검증 또는 배포가 필요한 시점에 생성합니다.
+운영 CI/CD에서는 Commit SHA 기반 이미지를 생성한 뒤 Version Tag와 `latest`로 승격하여 배포합니다.
 
 ---
 
@@ -308,38 +328,127 @@ uv remove <package>
 
 ## 8. Database 및 인프라 구성
 
-서비스 Database는 MySQL을 사용하며 서비스 데이터와 MLflow Metadata를 분리하여 관리합니다.
+NHN Cloud RDS for MySQL을 사용하며 서비스 데이터, MLflow Metadata, MLflow 인증 정보를 Database 단위로 분리하여 관리합니다.
 
 ```text
-MySQL
+NHN Cloud RDS for MySQL
 │
 ├── cnc_wearpoint
-│   └── 서비스 데이터
+│   └── CNC WearPoint 서비스 데이터
 │
-└── mlflow
-    └── 실험 및 모델 메타데이터
+├── mlflow
+│   └── MLflow Tracking / Model Registry Metadata
+│
+└── mlflow_auth
+    └── MLflow Basic Auth 사용자 및 권한 정보
 ```
 
-현재 NHN Cloud에서는 App 서버와 Database 영역을 분리하여 구성하고 있습니다.
+### 8.1 CNC WearPoint 서비스 DB
+
+`cnc_wearpoint` Database에는 다음 데이터를 저장합니다.
+
+- Set 및 가공 조건
+- Measurement 데이터
+- 실제 마모값
+- AI 모델 예측 결과
+- Warning / Danger 상태 및 Alert 정보
+
+로컬 MySQL 데이터를 NHN Cloud RDS로 이전했으며, App VM에서 RDS 연결 및 API 조회를 검증했습니다.
+
+### 8.2 MLflow Tracking / Registry DB
+
+`mlflow` Database는 MLflow의 Backend Store로 사용합니다.
+
+MLflow 3.18.0의 Database Migration을 적용했으며 Experiment, Run, Parameter, Metric 등 Tracking 데이터를 RDS MySQL에 정상 저장하는 것을 검증했습니다.
 
 ```text
-CNC WearPoint Team
+Python MLflow Client
         │
         ▼
-     Internet
+MLflow Tracking Server
         │
         ▼
-   Floating IP
+RDS MySQL
         │
-        ▼
-     App VM
-        │
-        │ VPC Internal
-        ▼
- RDS for MySQL
+        └── mlflow
 ```
 
-RDS는 외부 인터넷에 직접 노출하지 않고 Private Network에 배치하여 App Network에서 필요한 Database 접근만 허용하도록 설계했습니다.
+테스트 Experiment와 Run을 생성하고 Parameter 및 Metric 데이터가 RDS에 정상 저장되는 것을 확인했습니다.
+
+### 8.3 MLflow 인증 DB
+
+MLflow Basic Auth의 사용자 및 권한 데이터는 `mlflow_auth` Database로 분리하여 관리합니다.
+
+```text
+mlflow_auth
+├── users
+├── roles
+├── user_role_assignments
+├── experiment_permissions
+├── registered_model_permissions
+└── ...
+```
+
+Tracking / Registry Metadata와 인증 정보를 분리하여 관리하며, 비인증 사용자의 MLflow API 접근이 `401 Unauthorized`로 차단되는 것을 확인했습니다.
+
+### 8.4 NHN Cloud 네트워크 구성
+
+현재 운영 환경은 다음 구조를 사용합니다.
+
+```text
+사용자
+  │
+  ▼
+Internet
+  │
+  ▼
+DuckDNS + HTTPS
+  │
+  ▼
+Nginx Reverse Proxy
+  │
+  ├── /         → Frontend
+  │
+  ├── /api/     → FastAPI Backend
+  │
+  └── /mlflow/  → MLflow Tracking Server
+  │
+  ▼
+App VM
+  │
+  │ VPC Internal
+  ▼
+RDS for MySQL
+```
+
+RDS는 외부 인터넷에 직접 노출하지 않고 Private Network에 배치하여 App VM에서 필요한 Database 접근만 허용하도록 구성했습니다.
+
+### 8.5 MLflow 운영
+
+MLflow Tracking Server는 App VM의 Python Virtual Environment에서 실행하며 systemd 서비스로 등록하여 SSH Session과 관계없이 상시 실행되도록 구성했습니다.
+
+```text
+systemd
+  │
+  ▼
+MLflow Tracking Server
+  │
+  ├── Tracking / Registry → RDS mlflow
+  └── Basic Auth          → RDS mlflow_auth
+```
+
+외부 접근은 5000 Port를 직접 공개하지 않고 Nginx와 HTTPS를 통해 `/mlflow/` 경로로 제공합니다.
+
+### 8.6 Object Storage
+
+향후 이미지 원본·처리 데이터 및 MLflow Model Artifact를 NHN Cloud Object Storage로 분리하여 관리할 예정입니다.
+
+```text
+NHN Cloud Object Storage
+├── 이미지 원본
+├── 처리 이미지 / 센서 데이터
+└── MLflow Model Artifacts
+```
 
 세부 내용은 다음 문서에서 확인할 수 있습니다.
 
@@ -350,14 +459,58 @@ RDS는 외부 인터넷에 직접 노출하지 않고 Private Network에 배치�
 
 ## 9. 백엔드 CI/CD
 
-GitHub의 `main` 브랜치 또는 `v*` 태그를 push하면 [GitHub Actions](.github/workflows/sync-to-gitlab.yml)가 해당 브랜치나 태그를 GitLab 저장소에 동기화합니다. 이후 [GitLab CI](.gitlab-ci.yml)가 `cnc-wp-runner`에서 백엔드 이미지 빌드와 배포 작업을 실행하도록 구성되어 있습니다.
+GitHub를 팀의 메인 소스 저장소로 사용합니다.
+
+GitHub의 `main` 브랜치 또는 `v*` Tag를 Push하면 [GitHub Actions](.github/workflows/sync-to-gitlab.yml)가 해당 Branch 또는 Tag를 GitLab 저장소에 동기화합니다.
+
+```text
+GitHub
+   │
+   ▼
+GitHub Actions
+   │
+   │ Source / Tag Sync
+   ▼
+GitLab
+```
+
+GitHub Actions는 메인 CI/CD Build Engine이 아니라 **GitHub → GitLab 동기화 역할**을 담당합니다.
+
+GitLab로 소스가 동기화되면 [GitLab CI](.gitlab-ci.yml)가 `cnc-wp-runner`에서 실제 Container Image Build 및 배포 Pipeline을 수행합니다.
+
+```text
+GitLab
+  │
+  ▼
+GitLab CI
+  │
+  ▼
+GitLab Runner
+  │
+  ├── Build
+  ├── Image Push
+  ├── Promote
+  └── Deploy
+       │
+       ▼
+     Quay.io
+       │
+       ▼
+NHN Cloud App VM
+```
 
 | 트리거 | GitLab CI 동작 |
 |---|---|
-| `main` 커밋 | Docker 이미지를 한 번 빌드하고 커밋 SHA 태그로 Quay.io에 게시 |
-| `vX.Y.Z` 태그 | 해당 커밋의 SHA 이미지를 버전 태그와 `latest`로 승격하고, 승인된 버전 이미지를 운영 VM에 배포 |
+| `main` Commit | Docker Image를 Build하고 Commit SHA Tag로 Quay.io에 게시 |
+| `vX.Y.Z` Tag | 동일 Commit의 SHA Image를 Version Tag 및 `latest`로 승격 후 운영 VM에 배포 |
 
-운영 배포 단계는 Docker Compose로 백엔드 컨테이너를 갱신한 뒤 로컬 `/health`, 외부 HTTPS `/health`, `/api/sets` 응답을 확인하도록 설정되어 있습니다. 로컬 `pytest` 실행 방법은 [자동 테스트](#5-자동-테스트)에 있으며, 현재 GitLab CI 단계에는 자동 테스트가 포함되어 있지 않습니다. 배포 성공 및 운영 환경 검증 완료 여부는 실제 파이프라인 실행 결과로 확인해야 합니다.
+운영 배포 단계에서는 Docker Compose로 Backend Container를 갱신한 뒤 다음 항목을 확인하도록 구성되어 있습니다.
+
+- VM 내부 `/health`
+- 외부 HTTPS `/health`
+- `/api/sets`
+
+로컬 `pytest` 실행 방법은 [자동 테스트](#5-자동-테스트)에 있으며, 현재 GitLab CI Pipeline에는 자동 테스트가 포함되어 있지 않습니다.
 
 ---
 
@@ -371,26 +524,45 @@ GitHub의 `main` 브랜치 또는 `v*` 태그를 push하면 [GitHub Actions](.gi
 - React ↔ FastAPI 통신 검증
 - API Router 및 환경 설정 분리
 - pytest 기반 자동 테스트 구성
-- Docker 이미지 Build 및 실행 검증
-- Quay.io 이미지 공유 검증
+- Docker Image Build 및 실행 검증
+- Quay.io Image 공유 검증
 - MySQL 기반 Set 및 Measurement 관리
 - 실제 마모값 조회
 - 최신 AI 예측 결과 조회
-- CSV 기반 데모 예측 결과 등록
+- CSV 기반 Demo 예측 결과 등록
 - CNC WearPoint 서비스 DB Schema 구성
-- MLflow Metadata MySQL Schema 구조 검증
-- NHN Cloud VPC 및 App / Database Network 설계
-- NHN Cloud App VM 및 RDS 기반 인프라 구성
-- GitHub Actions를 통한 백엔드 소스의 GitLab 동기화 설정
-- GitLab CI의 Quay.io 이미지 빌드·승격 및 운영 VM 배포 단계 구성
+- NHN Cloud VPC 및 App / Database Network 구성
+- NHN Cloud App VM 및 RDS 기반 운영 환경 구성
+- App VM → RDS MySQL 연결 검증
+- 로컬 서비스 DB → NHN Cloud RDS 이전
+- RDS 데이터 Row Count 및 API 조회 검증
+- DuckDNS Domain 연결
+- Nginx Reverse Proxy 구성
+- Let's Encrypt HTTPS 적용
+- Frontend / Backend HTTPS 서비스 접근 구성
+- MLflow 3.18.0 Tracking Server 구성
+- MLflow Backend Store → NHN Cloud RDS MySQL 연동
+- MLflow Tracking Database Migration 적용
+- MLflow Experiment / Run / Parameter / Metric RDS 저장 검증
+- MLflow Tracking / Registry용 `mlflow` Database 구성
+- MLflow Basic Auth용 `mlflow_auth` Database 분리 구성
+- MLflow Basic Auth 적용
+- 비인증 MLflow API 접근 차단 검증
+- MLflow systemd 상시 실행 구성
+- Nginx HTTPS `/mlflow/` Reverse Proxy 구성
+- GitHub Actions를 통한 GitHub → GitLab Source / Tag 동기화 설정
+- GitLab CI의 Quay.io Image Build·승격 및 운영 VM 배포 단계 구성
 
 ### 진행 예정
 
-- App VM과 RDS 연결 및 Database 권한 검증
-- 로컬 서비스 DB의 RDS 이전
-- MLflow Backend Store의 MySQL / RDS 연동 검증
 - AI 모델과 FastAPI Prediction API 직접 연동
-- 운영 배포 파이프라인 실행 결과 및 서비스 환경 검증
+- FastAPI와 MLflow Model Registry 기반 모델 조회 및 Load 연동
+- MLflow Registered Model / Model Version 운영 검증
+- NHN Cloud Object Storage 구성
+- 이미지·처리 데이터의 Object Storage 저장 구조 적용
+- MLflow Artifact Store → Object Storage 연동
+- CI/CD 운영 배포 Pipeline 최종 E2E 검증
+- 운영 환경 보안 및 문서 최종 정리
 
 ---
 
@@ -406,14 +578,15 @@ docs/
 │
 ├── architecture/
 │   ├── diagrams/
-│   │   └── 인프라 구성도 생성 코드
+│   │   └── 아키텍처 및 인프라 구성도 생성 코드
 │   └── images/
 │       ├── 인프라 구성도
-│       └── cnc_wp_mlops_architecture.png  # 전체 MLOps 아키텍처 개요
+│       └── cnc_wp_mlops_architecture.png
+│           └── 전체 MLOps 아키텍처 및 CI/CD 흐름
 │
 └── deployment/
     └── infrastructure.md
         └── Docker Compose 및 배포 파일 관리
 ```
 
-프로젝트의 실행 방법, 설계 근거 및 인프라 구성을 문서별로 분리하여 관리하고 있습니다.
+프로젝트의 실행 방법, 설계 근거, Database 및 인프라 구성을 문서별로 분리하여 관리합니다.
