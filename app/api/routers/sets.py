@@ -5,7 +5,7 @@ from app.core.database import get_connection
 
 router = APIRouter(prefix="/api/sets", tags=["Set 조회"])
 
-
+#Set4~11 목록 조회
 @router.get("")
 def get_sets():
     """사용 대상인 Set4~11과 Set별 측정 수를 조회합니다."""
@@ -39,6 +39,7 @@ def get_sets():
         connection.close()
 
 
+#Set의 측정 정보·정답 라벨·최신 예측 조회
 @router.get("/{set_number}/measurements")
 def get_measurements(
     set_number: int = Path(..., ge=4, le=11),

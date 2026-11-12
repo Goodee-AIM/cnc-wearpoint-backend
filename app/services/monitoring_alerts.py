@@ -19,7 +19,7 @@ def emit_due_alerts(cursor, state, now):
     cursor.execute("SELECT MAX(start_ms + duration_ms) AS total_ms FROM monitoring_items")
     total_ms = cursor.fetchone()["total_ms"] or 0
     if not total_ms:
-        return
+        returns
     # 현재 세션의 기록만 조회해 누락 회차를 복구합니다. 확인 상태는 덮어쓰지 않습니다.
     cursor.execute("""
         SELECT cycle_number, set_number, position FROM monitoring_alert_events

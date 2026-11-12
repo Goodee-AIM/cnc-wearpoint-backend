@@ -71,17 +71,18 @@ def test_pause_flushes_before_stopping_and_reset_preserves_history(populated):
     assert len(rows(path)) == 3
     second = monitoring.start()
     assert second["session_id"] != first["session_id"]
+    monitoring_alerts.process_due_alerts()
     assert len(rows(path)) == 5
 
 
-def test_reset_flushes_missed_events_before_deleting_schedule(populated):
+def test_reset_flushes_missed_events_and_reuses_schedule(populated):
     path, clock = populated
     monitoring.start()
     clock[0] += timedelta(seconds=11)
     monitoring.reset()
     assert len(rows(path)) == 3
     with sqlite3.connect(path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM monitoring_items").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM monitoring_items").fetchone()[0] == 3
 
 
 def test_prediction_added_later_is_recorded_for_reached_measurement(populated):
@@ -97,21 +98,20 @@ def test_prediction_added_later_is_recorded_for_reached_measurement(populated):
     assert any(row["prediction_id"] == 702 for row in rows(path))
 
 
-def test_common_feed_has_legacy_and_label_only_events_and_same_counts(populated):
+def test_common_feed_has_current_session_events_and_same_counts(populated):
     monitoring.start()
     with TestClient(app) as a, TestClient(app) as b:
         first = a.get("/api/monitoring/alerts").json()
         second = b.get("/api/monitoring/alerts").json()
     assert first == second
-    assert first["total"] == first["unread"] == 3
-    assert len(first["items"]) == 3
-    assert any(row["id"] == "legacy:1" for row in first["items"])
+    assert first["total"] == first["unread"] == 2
+    assert len(first["items"]) == 2
+    assert all(row["id"] != "legacy:1" for row in first["items"])
     label_only = next(row for row in first["items"] if row["prediction_id"] is None)
     assert label_only["source"] == "label"
     assert label_only["can_acknowledge"] is False
-    legacy = next(row for row in first["items"] if row["id"] == "legacy:1")
-    assert legacy["created_at"].startswith("2026-11-11T01:00:00")
-    assert legacy["created_at"].endswith("+00:00")
+    assert all(row["session_id"] == first["session_id"] for row in first["items"])
+    assert all(row["created_at"].endswith("+00:00") for row in first["items"])
 
 
 def test_acknowledgment_is_shared_idempotent_and_keeps_occurrence_time(populated):
@@ -130,7 +130,7 @@ def test_acknowledgment_is_shared_idempotent_and_keeps_occurrence_time(populated
         assert first.json()["created_at"] == created_at
         assert first.json()["detail_confirmed_at"] != created_at
         shared = client.get("/api/monitoring/alerts").json()
-        assert shared["total"] == 3 and shared["unread"] == 2
+        assert shared["total"] == 2 and shared["unread"] == 1
         label_only = next(row for row in feed["items"] if row["prediction_id"] is None)
         assert client.patch(f"/api/monitoring/alerts/{label_only['id']}/acknowledge").status_code == 422
         assert client.patch("/api/monitoring/alerts/bad-id/acknowledge").status_code == 400
@@ -160,9 +160,9 @@ def test_pagination_caps_keep_new_insertions_from_shifting_pages(populated):
         monitoring_alerts.process_due_alerts()
         caps = {"event_max_id": first["event_max_id"], "legacy_max_id": first["legacy_max_id"]}
         second = client.get("/api/monitoring/alerts", params={**caps, "limit": 500, "offset": 1}).json()
-        assert first["total"] == second["total"] == 3
-        assert len({row["id"] for row in first["items"] + second["items"]}) == 3
-        assert client.get("/api/monitoring/alerts").json()["total"] == 4
+        assert first["total"] == second["total"] == 2
+        assert len({row["id"] for row in first["items"] + second["items"]}) == 2
+        assert client.get("/api/monitoring/alerts").json()["total"] == 3
 
 
 def test_worker_lifespan_starts_without_browser_requests_and_stops(monkeypatch):
@@ -284,3 +284,67 @@ def test_worker_catches_up_cycles_and_pause_keeps_absolute_clock(populated):
     new = monitoring.start()
     assert new['cycle_number'] == 1
     assert new['session_id'] != started['session_id']
+
+
+def test_reset_restarts_cycle_and_counts_without_deleting_history_or_scanning_csv(populated, monkeypatch):
+    path, clock = populated
+    original = monitoring.start()
+    with TestClient(app) as client:
+        feed = client.get("/api/monitoring/alerts").json()
+        event = next(row for row in feed["items"] if row["prediction_id"] is not None)
+        assert client.patch(f"/api/monitoring/alerts/{event['id']}/acknowledge").status_code == 200
+        clock[0] += timedelta(seconds=61)
+        monitoring_alerts.process_due_alerts()
+        before = rows(path)
+        assert {row["cycle_number"] for row in before} == {1, 2, 3}
+        monitoring.pause()
+
+        def unexpected_scan(*args, **kwargs):
+            pytest.fail("reset must reuse the prepared schedule")
+
+        monkeypatch.setattr(monitoring, "build_schedule", unexpected_scan)
+        reset = client.post("/api/monitoring/reset", headers=TOKEN).json()
+        assert reset["status"] == "running"
+        assert reset["cycle_number"] == 1
+        assert reset["elapsed_ms"] == reset["cycle_elapsed_ms"] == 0
+        assert reset["session_id"] != original["session_id"]
+        assert reset["total_duration_ms"] == original["total_duration_ms"]
+        assert rows(path) == before
+        empty = client.get("/api/monitoring/alerts").json()
+        assert empty["session_id"] == reset["session_id"]
+        assert empty["total"] == empty["unread"] == 0
+        assert empty["items"] == []
+        assert monitoring.start()["session_id"] == reset["session_id"]
+
+        # No browser request creates the next occurrences: the server worker does.
+        monitoring_alerts.process_due_alerts()
+        new = client.get("/api/monitoring/alerts").json()
+        assert new["total"] == new["unread"] == 2
+        assert all(row["detail_confirmed_at"] is None for row in new["items"])
+        assert all(row["session_id"] == reset["session_id"] for row in new["items"])
+        assert len(rows(path)) == len(before) + 2
+        assert rows(path)[:len(before)] == before
+
+
+def test_session_reset_between_pages_returns_conflict(populated):
+    monitoring.start()
+    with TestClient(app) as client:
+        first = client.get("/api/monitoring/alerts?limit=1").json()
+        monitoring.reset()
+        response = client.get("/api/monitoring/alerts", params={
+            "limit": 1, "offset": 1, "session_id": first["session_id"],
+            "event_max_id": first["event_max_id"], "legacy_max_id": first["legacy_max_id"],
+        })
+        assert response.status_code == 409
+        assert client.get("/api/monitoring/alerts").json()["total"] == 0
+
+
+def test_reset_without_schedule_has_empty_counts_and_first_start_keeps_new_session(populated):
+    with TestClient(app) as client:
+        assert client.get("/api/monitoring/alerts").json()["total"] == 0
+        reset = monitoring.reset()
+        assert reset["status"] == "idle"
+        assert reset["cycle_number"] == 1
+        assert reset["session_id"]
+        assert client.get("/api/monitoring/alerts").json()["total"] == 0
+        assert monitoring.start()["session_id"] == reset["session_id"]

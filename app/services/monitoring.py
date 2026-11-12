@@ -100,7 +100,7 @@ def state_response(state, items, now):
     elapsed = elapsed_ms(state, now)
     total_ms = max((item["start_ms"] + item["duration_ms"] for item in items), default=0)
     status = state["status"]
-    cycle = elapsed // total_ms + 1 if total_ms else 0
+    cycle = elapsed // total_ms + 1 if total_ms else (1 if state["session_id"] else 0)
     cycle_elapsed = elapsed % total_ms if total_ms else 0
     sets = []
     for set_number in range(4, 12):

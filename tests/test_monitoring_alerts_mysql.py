@@ -69,7 +69,7 @@ def test_feed_unifies_collations_on_mysql():
             cursor.fetchall()
         assert captured.value.errno == 1271
 
-        cursor.execute(FIXTURE_SQL + f"SELECT * FROM ({FEED_SQL}) AS history", (1, -540, -540, 1))
+        cursor.execute(FIXTURE_SQL + f"SELECT * FROM ({FEED_SQL}) AS history", (1, "session", -540, -540, 1))
         rows = {row["id"]: row for row in cursor.fetchall()}
         assert set(rows) == {"monitoring:1", "legacy:1"}
         assert rows["monitoring:1"]["message"] == "신규 알림"
@@ -79,7 +79,7 @@ def test_feed_unifies_collations_on_mysql():
         cursor.execute(FIXTURE_SQL + f"""
             SELECT COUNT(*) AS total, COUNT(DISTINCT COLLATION(message)) AS collations
             FROM ({FEED_SQL}) AS history
-        """, (1, -540, -540, 1))
+        """, (1, "session", -540, -540, 1))
         assert cursor.fetchone() == {"total": 2, "collations": 1}
     finally:
         cursor.close()

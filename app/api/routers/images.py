@@ -35,6 +35,7 @@ def natural_key(name: str):
     ]
 
 
+#Set별 이미지 목록 조회
 @router.get("/{set_id}")
 def list_images(set_id: str):
     """선택한 Set의 서버 이미지 목록을 반환합니다."""
@@ -82,6 +83,7 @@ def list_images(set_id: str):
     }
 
 
+#Set별 이미지 파일 조회
 @router.get("/{set_id}/{filename}")
 def get_image(set_id: str, filename: str):
     """서버에 저장된 PNG 또는 JPG 이미지를 반환합니다."""

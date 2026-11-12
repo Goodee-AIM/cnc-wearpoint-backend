@@ -1,6 +1,6 @@
 # 공통 알림 3단계 적용과 확인
 
-공통 재생 알림은 백엔드 worker가 기록하고, 모든 접속자가 DB 이력으로 전체·미확인
+공통 재생 알림은 백엔드 worker가 기록하고, 모든 접속자가 현재 세션의 DB 이력으로 전체·미확인
 건수를 집계합니다. 브라우저 접속이나 알림 페이지 진입을 생성 조건으로 사용하지 않습니다.
 
 ## 파일 적용
@@ -84,8 +84,8 @@ Set4~9는 원본 라벨 마모량 50/90 μm 기준으로 기록합니다. Set10~
 warning_threshold_um과 danger_threshold_um을 사용합니다. 정상 판정은 알림을 생성하지 않습니다.
 같은 세션·회차·Set·사진 순번의 발생 건은 한 번만 기록합니다. 상태 행의 DB 잠금과 UNIQUE 키로
 여러 worker가 실행돼도 중복 저장을 막습니다. pause와 reset 직전에도 지난 구간을 기록합니다.
-reset은 발생 이력을 유지하며, 다음 start는 새 세션의 새 발생 건을 만듭니다.
-기존 alerts는 session 정보가 없으므로 과거 이력으로 별도 유지하고 공통 목록에 함께 표시합니다.
+reset은 발생 이력을 유지하며 새 세션의 1회차를 즉시 재생합니다. 현재 세션만 집계하므로 전체·확인·미확인 건수는 초기화됩니다. 첫 측정이 경고라면 worker가 곧 새 알림을 기록하므로 0건 화면이 오래 유지되지는 않습니다.
+기존 alerts와 이전 session의 알림은 DB에 보존하고 현재 세션 목록과 건수에서는 제외합니다.
 
 이 단계는 저장된 MATWI 데이터의 반복 재생을 대상으로 합니다.
 기존 DB에는 `20261111_monitoring_alert_cycles.sql`을 한 번 적용합니다.
@@ -103,7 +103,7 @@ reset은 알림 이력을 삭제하지 않습니다.
 
 | 메서드 | 경로 | 기능 |
 | --- | --- | --- |
-| GET | `/api/monitoring/alerts` | 신규·기존 DB 이력과 total, unread 조회 |
+| GET | `/api/monitoring/alerts` | 현재 세션 이력과 total, unread, session_id 조회 |
 | PATCH | `/api/monitoring/alerts/monitoring:ID/acknowledge` | 신규 알림 확인 |
 | PATCH | `/api/monitoring/alerts/legacy:ID/acknowledge` | 기존 alerts의 확인 시각 기록 |
 
@@ -131,12 +131,10 @@ Invoke-RestMethod "http://127.0.0.1:8001/api/monitoring/alerts?limit=1" |
 
 ```sql
 SELECT COUNT(*) AS total,
-       SUM(detail_confirmed_at IS NULL) AS unread
-FROM (
-    SELECT detail_confirmed_at FROM cnc_wearpoint.alerts
-    UNION ALL
-    SELECT detail_confirmed_at FROM cnc_wearpoint.monitoring_alert_events
-) AS combined_alerts;
+       COALESCE(SUM(e.detail_confirmed_at IS NOT NULL), 0) AS confirmed,
+       COALESCE(SUM(e.detail_confirmed_at IS NULL), 0) AS unread
+FROM cnc_wearpoint.monitoring_alert_events AS e
+JOIN cnc_wearpoint.monitoring_state AS s ON s.id = 1 AND s.session_id = e.session_id;
 
 SELECT id, session_id, set_number, measurement_id, prediction_id, source, level,
        DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+09:00'), '%Y-%m-%d %H:%i:%s') AS created_at,
@@ -167,3 +165,5 @@ Remove-Item Env:CNC_TEST_MYSQL_COLLATIONS
 이 검사는 DB 테이블 생성이나 데이터 삽입 없이 SELECT만 실행합니다.
 일반 테스트에서는 실제 MySQL 연결이 필요하므로 이 검사 하나를 건너뜁니다.
 수정 환경에서는 일반 테스트 48개가 통과했고 실제 MySQL 검사는 실행하지 못했습니다.
+
+후속 페이지는 첫 응답의 session_id와 event_max_id를 전달합니다. 페이지 조회 도중 reset으로 세션이 바뀌면 409를 반환하므로 첫 페이지부터 다시 조회합니다. 프런트 자동 갱신은 약 5초 간격입니다. 스키마와 기존 데이터 변경은 필요하지 않습니다.

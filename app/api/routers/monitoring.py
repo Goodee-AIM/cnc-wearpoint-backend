@@ -136,7 +136,7 @@ def start():
                         %(image_name)s, %(sensor_name)s, %(start_ms)s,
                         %(duration_ms)s, %(playback_mode)s, %(message)s)
             """, schedule)
-            state["session_id"] = str(uuid4())
+            state["session_id"] = state["session_id"] or str(uuid4())
         now = read_clock(cursor)
         cursor.execute("""
             UPDATE monitoring_state SET session_id = %s, status = 'running',
@@ -169,11 +169,21 @@ def pause():
 def reset():
     with monitoring_cursor() as cursor:
         state = read_state(cursor, exclusive=True)
-        emit_due_alerts(cursor, state, read_clock(cursor))
-        cursor.execute("DELETE FROM monitoring_items")
+        now = read_clock(cursor)
+        # 이전 세션의 마지막 발생은 보존하되 새 세션 집계에서는 제외합니다.
+        emit_due_alerts(cursor, state, now)
+        items = read_items(cursor)
+        # 이미 만든 일정은 유지해 reset마다 대용량 CSV를 재검사하지 않습니다.
+        state = {
+            "session_id": str(uuid4()),
+            "status": "running" if items else "idle",
+            "elapsed_ms": 0,
+            "resumed_at": now if items else None,
+            "revision": state["revision"] + 1,
+        }
         cursor.execute("""
-            UPDATE monitoring_state SET session_id = NULL, status = 'idle',
-                elapsed_ms = 0, resumed_at = NULL, revision = revision + 1 WHERE id = 1
-        """)
-        state = {**EMPTY_STATE, "revision": state["revision"] + 1}
-        return state_response(state, [], read_clock(cursor))
+            UPDATE monitoring_state SET session_id = %s, status = %s,
+                elapsed_ms = 0, resumed_at = %s, revision = revision + 1 WHERE id = 1
+        """, (state["session_id"], state["status"], state["resumed_at"]))
+        # 새 세션 알림은 commit 이후 worker가 기록합니다. 이 응답 시점의 새 집계는 0건입니다.
+        return state_response(state, items, now)

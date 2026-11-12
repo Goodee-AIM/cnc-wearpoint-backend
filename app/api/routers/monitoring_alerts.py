@@ -1,11 +1,11 @@
-"""공통 재생 이력과 기존 alerts 이력을 하나의 DB 목록으로 조회합니다."""
+"""현재 재생 세션의 알림 이력을 집계하고 발생 건별 확인을 기록합니다."""
 import os
 import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Path, Query
 
-from app.api.routers.monitoring import monitoring_cursor, read_clock
+from app.api.routers.monitoring import monitoring_cursor, read_clock, read_state
 
 
 router = APIRouter(prefix="/api/monitoring/alerts", tags=["공통 알림 이력"])
@@ -36,7 +36,7 @@ FEED_SQL = """
         WHERE e.prediction_id IS NULL AND latest.measurement_id = e.measurement_id
         ORDER BY latest.predicted_at DESC, latest.id DESC LIMIT 1
     )
-    WHERE e.id <= %s
+    WHERE e.id <= %s AND e.session_id = %s
     UNION ALL
     SELECT
         CONVERT(CONCAT('legacy:', a.id) USING utf8mb4) COLLATE utf8mb4_0900_ai_ci,
@@ -90,23 +90,27 @@ def list_shared_alerts(
     offset: int = Query(0, ge=0),
     event_max_id: int | None = Query(None, ge=0),
     legacy_max_id: int | None = Query(None, ge=0),
+    session_id: str | None = Query(None),
 ):
     with monitoring_cursor() as cursor:
-        if event_max_id is None or legacy_max_id is None:
+        # 상태 행을 읽는 동안 reset이 끼어들지 않게 하고, 모든 브라우저가 같은 세션을 집계합니다.
+        current_session = read_state(cursor)["session_id"]
+        if session_id is not None and session_id != current_session:
+            raise HTTPException(409, "재생 세션이 초기화됐습니다. 첫 페이지부터 다시 조회하세요.")
+        if event_max_id is None:
             cursor.execute("""
-                SELECT (SELECT COALESCE(MAX(id),0) FROM monitoring_alert_events) AS event_max_id,
-                       (SELECT COALESCE(MAX(id),0) FROM alerts) AS legacy_max_id
-            """)
-            caps = cursor.fetchone()
-            event_max_id = caps["event_max_id"]
-            legacy_max_id = caps["legacy_max_id"]
-        shift = -legacy_offset()
-        parameters = (event_max_id, shift, shift, legacy_max_id)
-        cursor.execute(f"""
+                SELECT COALESCE(MAX(id),0) AS event_max_id
+                FROM monitoring_alert_events WHERE session_id = %s
+            """, (current_session,))
+            event_max_id = cursor.fetchone()["event_max_id"]
+        # 기존 클라이언트의 페이지 인자는 유지하되, 세션 없는 legacy 이력은 현재 집계에서 제외합니다.
+        legacy_max_id = 0
+        parameters = (event_max_id, current_session, 0, 0, legacy_max_id)
+        cursor.execute("""
             SELECT COUNT(*) AS total,
                    COALESCE(SUM(CASE WHEN detail_confirmed_at IS NULL THEN 1 ELSE 0 END),0) AS unread
-            FROM ({FEED_SQL}) AS history
-        """, parameters)
+            FROM monitoring_alert_events WHERE session_id = %s AND id <= %s
+        """, (current_session, event_max_id))
         counts = {key: int(value) for key, value in cursor.fetchone().items()}
         cursor.execute(f"""
             SELECT * FROM ({FEED_SQL}) AS history
@@ -117,7 +121,7 @@ def list_shared_alerts(
             row["can_acknowledge"] = row["prediction_id"] is not None
         return {
             **counts, "event_max_id": event_max_id, "legacy_max_id": legacy_max_id,
-            "items": items,
+            "session_id": current_session, "items": items,
         }
 
 

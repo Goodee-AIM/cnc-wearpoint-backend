@@ -17,6 +17,7 @@ SENSOR_NAME_PATTERN = re.compile(
 )
 
 
+#Set별 센서 CSV 파일 조회
 @router.get("/{set_id}/{filename}")
 def get_sensor(set_id: str, filename: str):
     """선택한 Set의 센서 CSV를 반환합니다."""

@@ -189,9 +189,11 @@ def test_late_join_pause_resume_reset_and_restart(setup):
         assert done["cycle_elapsed_ms"] == 13000
         assert done["sets"][-1]["elapsed_ms"] == 13000
         cleared = client.post("/api/monitoring/reset", headers=TOKEN).json()
-        assert cleared["status"] == "idle"
-        assert cleared["session_id"] is None
-        assert all(row["status"] == "empty" for row in cleared["sets"])
+        assert cleared["status"] == "running"
+        assert cleared["session_id"] != first["session_id"]
+        assert cleared["cycle_number"] == 1
+        assert cleared["elapsed_ms"] == 0
+        assert cleared["sets"][0]["measurement_id"] == 1
         assert client.post("/api/monitoring/start", headers=TOKEN).json()["session_id"] != first["session_id"]
 
 
