@@ -6,9 +6,11 @@ from pathlib import Path
 from diagrams import Cluster, Diagram, Edge
 from diagrams.generic.database import SQL
 from diagrams.generic.network import Firewall, Router
-from diagrams.generic.os import Ubuntu
+from diagrams.generic.storage import Storage
 from diagrams.onprem.client import User
-from diagrams.onprem.network import Internet
+from diagrams.onprem.container import Docker
+from diagrams.onprem.mlops import Mlflow
+from diagrams.onprem.network import Internet, Nginx
 
 
 # ============================================================
@@ -34,6 +36,7 @@ def embed_svg_images(svg_path: Path) -> None:
     Convert local image references inside SVG into Base64 data URIs
     so the SVG renders correctly on GitHub and other environments.
     """
+
     if not svg_path.exists():
         print(f"[WARN] SVG not found: {svg_path}")
         return
@@ -58,6 +61,7 @@ def embed_svg_images(svg_path: Path) -> None:
             return full_match
 
         mime_type, _ = mimetypes.guess_type(image_path.name)
+
         if mime_type is None:
             mime_type = "image/png"
 
@@ -75,7 +79,10 @@ def embed_svg_images(svg_path: Path) -> None:
     updated = re.sub(pattern, replace_href, content)
     svg_path.write_text(updated, encoding="utf-8")
 
-    print(f"[OK] Embedded {embedded_count} SVG image(s): {svg_path}")
+    print(
+        f"[OK] Embedded {embedded_count} SVG image(s): "
+        f"{svg_path}"
+    )
 
 
 # ============================================================
@@ -85,8 +92,13 @@ def embed_svg_images(svg_path: Path) -> None:
 graph_attr = {
     "fontsize": "18",
     "pad": "0.5",
-    "nodesep": "0.8",
-    "ranksep": "1.1",
+    "nodesep": "0.65",
+    "ranksep": "1.0",
+    "splines": "spline",
+}
+
+edge_attr = {
+    "fontsize": "11",
 }
 
 
@@ -101,73 +113,247 @@ with Diagram(
     show=False,
     direction="LR",
     graph_attr=graph_attr,
+    edge_attr=edge_attr,
 ):
 
+    # ========================================================
     # External access
-    team = User("CNC WearPoint Team")
+    # ========================================================
+
+    web_user = User(
+        "Web User\n"
+        "https://aimw.duckdns.org"
+    )
+
+    admin = User(
+        "Admin / Team\n"
+        "SSH Management"
+    )
+
     internet = Internet("Internet")
-    floating_ip = Router("Floating IP")
 
-    with Cluster("NHN Cloud - cnc-wp-vpc\n10.60.0.0/20"):
-
-        with Cluster("App Network\ncnc-wp-app-private\n10.60.0.64/27"):
-            app_sg = Firewall(
-                "cnc-wp-app-sg\n"
-                "SSH 22\n"
-                "14.36.141.67/32"
-            )
-
-            app_vm = Ubuntu(
-                "cnc-wp-app-01\n"
-                "Ubuntu 24.04 LTS\n"
-                "m2.c2m4\n"
-                "2 vCPU / 4GB\n"
-                "SSD 150GB"
-            )
-
-            app_rt = Router(
-                "cnc-wp-app-rt\n"
-                "10.60.0.0/20 -> local\n"
-                "0.0.0.0/0 -> IGW"
-            )
-
-            igw = Router("cnc-wp-igw")
-
-        with Cluster("Database Network\ncnc-wp-db-private\n10.60.0.32/28"):
-            db_sg = Firewall(
-                "cnc-wp-db-sg\n"
-                "DB Port\n"
-                "Source: 10.60.0.64/27"
-            )
-
-            rds = SQL(
-                "RDS for MySQL\n"
-                "MySQL 8.4.6\n"
-                "m2.c2m4\n"
-                "General SSD 20GB"
-            )
-
-            private_rt = Router(
-                "cnc-wp-private-rt\n"
-                "Default Route Table\n"
-                "10.60.0.0/20 -> local\n"
-                "No IGW"
-            )
+    floating_ip = Router(
+        "Floating IP\n"
+        "DuckDNS Target"
+    )
 
     # ========================================================
-    # Main flow
+    # NHN Cloud
     # ========================================================
 
-    team >> Edge(label="SSH 22") >> internet >> floating_ip >> app_sg >> app_vm
-    app_vm >> Edge(label="MySQL DB Port") >> db_sg >> rds
+    with Cluster("NHN Cloud"):
+
+        # ----------------------------------------------------
+        # VPC
+        # ----------------------------------------------------
+
+        with Cluster("cnc-wp-vpc\n10.60.0.0/20"):
+
+            # =================================================
+            # App Network
+            # =================================================
+
+            with Cluster(
+                "App Network\n"
+                "cnc-wp-app-private\n"
+                "10.60.0.64/27"
+            ):
+
+                app_sg = Firewall(
+                    "cnc-wp-app-sg\n"
+                    "HTTP 80 / HTTPS 443\n"
+                    "SSH 22\n"
+                    "SSH Source: 14.36.141.67/32"
+                )
+
+                app_rt = Router(
+                    "cnc-wp-app-rt\n"
+                    "10.60.0.0/20 -> local\n"
+                    "0.0.0.0/0 -> IGW"
+                )
+
+                igw = Router("cnc-wp-igw")
+
+                with Cluster(
+                    "cnc-wp-app-01\n"
+                    "Ubuntu 24.04 LTS\n"
+                    "m2.c2m4 | 2 vCPU / 4GB\n"
+                    "SSD 150GB"
+                ):
+
+                    nginx = Nginx(
+                        "Host Nginx\n"
+                        "HTTPS 443\n"
+                        "HTTP 80 -> 443\n"
+                        "Let's Encrypt"
+                    )
+
+                    frontend = Docker(
+                        "Frontend\n"
+                        "React + Nginx\n"
+                        "127.0.0.1:8080"
+                    )
+
+                    backend = Docker(
+                        "Backend\n"
+                        "FastAPI\n"
+                        "127.0.0.1:8000"
+                    )
+
+                    mlflow = Mlflow(
+                        "MLflow 3.18.0\n"
+                        "systemd / venv\n"
+                        "127.0.0.1:5000"
+                    )
+
+            # =================================================
+            # Database Network
+            # =================================================
+
+            with Cluster(
+                "Database Network\n"
+                "cnc-wp-db-private\n"
+                "10.60.0.32/28"
+            ):
+
+                db_sg = Firewall(
+                    "cnc-wp-db-sg\n"
+                    "MySQL 3306\n"
+                    "Source: App Subnet\n"
+                    "10.60.0.64/27"
+                )
+
+                rds = SQL(
+                    "RDS for MySQL\n"
+                    "MySQL 8.4.6\n"
+                    "m2.c2m4 | SSD 20GB\n\n"
+                    "cnc_wearpoint\n"
+                    "mlflow\n"
+                    "mlflow_auth"
+                )
+
+                private_rt = Router(
+                    "cnc-wp-private-rt\n"
+                    "10.60.0.0/20 -> local\n"
+                    "No IGW"
+                )
+
+        # ----------------------------------------------------
+        # NHN Managed Storage
+        # Object Storage is not placed inside the VPC subnet.
+        # ----------------------------------------------------
+
+        object_storage = Storage(
+            "NHN Object Storage\n"
+            "PRIVATE / Standard\n\n"
+            "cnc-wearpoint-data\n"
+            "cnc-wearpoint-mlflow"
+        )
 
     # ========================================================
-    # Network configuration (supporting relationships)
+    # Public service access
     # ========================================================
 
-    app_vm >> Edge(label="uses", style="dashed") >> app_rt
-    app_rt >> Edge(label="default route", style="dashed") >> igw
-    rds >> Edge(label="uses", style="dashed") >> private_rt
+    web_user >> Edge(
+        label="HTTPS 443"
+    ) >> internet
+
+    internet >> Edge(
+        label="DNS -> Floating IP"
+    ) >> floating_ip
+
+    floating_ip >> Edge(
+        label="80 / 443"
+    ) >> app_sg
+
+    app_sg >> Edge(
+        label="Web Traffic"
+    ) >> nginx
+
+    # ========================================================
+    # Administrative access
+    # ========================================================
+
+    admin >> Edge(
+        label="SSH 22\n14.36.141.67/32",
+        style="dashed",
+        color="#7b8894",
+    ) >> floating_ip
+
+    app_sg >> Edge(
+        label="SSH 22",
+        style="dashed",
+        color="#7b8894",
+    ) >> backend
+
+    # ========================================================
+    # Nginx routing
+    # ========================================================
+
+    nginx >> Edge(
+        label="/"
+    ) >> frontend
+
+    nginx >> Edge(
+        label="/api/"
+    ) >> backend
+
+    nginx >> Edge(
+        label="/mlflow/"
+    ) >> mlflow
+
+    # ========================================================
+    # RDS access
+    # ========================================================
+
+    backend >> Edge(
+        label="MySQL 3306\nTLS 1.3 + CA",
+        color="#2b6cb0",
+    ) >> db_sg
+
+    mlflow >> Edge(
+        label="MySQL 3306\nTLS 1.3 + CA",
+        color="#2b6cb0",
+    ) >> db_sg
+
+    db_sg >> rds
+
+    # ========================================================
+    # Object Storage access
+    # ========================================================
+
+    backend >> Edge(
+        label="HTTPS 443 / S3 API\nimages + sensors",
+        color="#dd6b20",
+    ) >> object_storage
+
+    mlflow >> Edge(
+        label="HTTPS 443 / S3 API\nMLflow artifacts",
+        color="#dd6b20",
+    ) >> object_storage
+
+    # ========================================================
+    # Route table relationships
+    # Supporting configuration, not application traffic.
+    # ========================================================
+
+    nginx >> Edge(
+        label="App subnet route",
+        style="dashed",
+        color="#7b8894",
+    ) >> app_rt
+
+    app_rt >> Edge(
+        label="default route",
+        style="dashed",
+        color="#7b8894",
+    ) >> igw
+
+    rds >> Edge(
+        label="DB subnet route",
+        style="dashed",
+        color="#7b8894",
+    ) >> private_rt
 
 
 # ============================================================

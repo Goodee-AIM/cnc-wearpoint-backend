@@ -8,6 +8,8 @@ React 기반 프론트엔드와 FastAPI를 연동하고, MySQL을 이용해 가�
 
 MLflow는 App VM에서 별도 Tracking Server로 실행하며, Basic Auth를 적용하여 인증된 사용자만 접근할 수 있도록 구성했습니다.
 
+서비스 이미지·센서 파일과 MLflow Artifact는 NHN Cloud Object Storage의 Private Bucket으로 분리하여 관리하고, FastAPI와 MLflow가 S3 호환 API를 통해 접근하도록 구성했습니다.
+
 ---
 
 ## 전체 아키텍처 개요
@@ -22,7 +24,7 @@ GitHub는 팀의 메인 소스 저장소로 사용하며, GitHub Actions는 GitH
 
 운영 환경에서는 Nginx를 HTTPS 단일 진입점으로 사용하여 요청 경로에 따라 Frontend, FastAPI Backend, MLflow Tracking Server로 요청을 분기합니다.
 
-AI 모델과 FastAPI Prediction API의 직접 연동 및 NHN Cloud Object Storage 기반 파일·MLflow Artifact 관리는 후속 단계로 진행합니다.
+서비스 이미지·센서 파일과 MLflow Artifact의 NHN Cloud Object Storage 전환은 완료했으며, 실제 AI 모델과 FastAPI Prediction API의 직접 연동은 후속 단계로 진행합니다.
 
 ---
 
@@ -54,6 +56,8 @@ AI 모델과 FastAPI Prediction API의 직접 연동 및 NHN Cloud Object Storag
 | Container | Docker |
 | API Documentation | Swagger |
 | ML Experiment Tracking | MLflow 3.18.0 |
+| Object Storage SDK | boto3 |
+| File / Artifact Storage | NHN Cloud Object Storage (S3-compatible) |
 | Cloud | NHN Cloud |
 | CI/CD | GitHub Actions + GitLab CI/CD |
 | Container Registry | Quay.io |
@@ -140,9 +144,9 @@ http://localhost:8000/docs
 | `/api/test` | React ↔ FastAPI 통신 테스트 |
 | `/api/sets` | Set 4~11 목록과 Set별 측정 수 조회 |
 | `/api/sets/{set_number}/measurements` | 선택한 Set의 측정·원본 정답·최신 예측 조회 |
-| `/api/images/{set_id}` | 서버 이미지 목록 조회 |
-| `/api/images/{set_id}/{filename}` | 이미지 파일 조회 |
-| `/api/sensors/{set_id}/{filename}` | 센서 CSV 파일 조회 |
+| `/api/images/{set_id}` | 이미지 목록 조회 (운영: Object Storage) |
+| `/api/images/{set_id}/{filename}` | 이미지 파일 조회 (운영: Object Storage Streaming) |
+| `/api/sensors/{set_id}/{filename}` | 센서 CSV 파일 조회 (운영: Object Storage Streaming) |
 | `/docs` | Swagger API 문서 |
 
 정상 응답 예시:
@@ -174,6 +178,8 @@ Schema 파일은 신규 Database 초기화에 사용하며, 이미 생성된 Dat
 - 예측 결과에는 `model_version`, `prediction_status`, `predicted_at`을 함께 관리합니다.
 - 실제값 또는 예측값이 존재하지 않는 경우 관련 필드는 `null`을 반환합니다.
 - 최신 예측은 `predicted_at`, `id`의 내림차순을 기준으로 결정합니다.
+- 운영 환경의 유효 이미지·센서 경로는 Object Storage Key(`images/...`, `sensors/...`)로 관리합니다.
+- 품질 기준 미달로 제외한 이미지 9건은 후속 상태 모델링을 위해 기존 경로 정보를 유지하고 있습니다.
 
 측정 조회 API는 Pagination을 지원합니다.
 
@@ -256,6 +262,8 @@ uv run python -m pytest -q
 
 Database 관련 회귀 테스트는 Mock Connection, Memory DB 및 임시 CSV를 사용하며 **실제 MySQL 데이터를 변경하지 않도록 구성했습니다.**
 
+Object Storage 연동 변경 후 로컬 회귀 테스트는 `61 passed, 1 skipped`로 확인했습니다.
+
 ---
 
 ## 6. Docker 실행
@@ -291,10 +299,10 @@ docker run --rm --env-file .env -p 127.0.0.1:8000:8000 cnc-wearpoint-backend:dev
 | `vX.Y.Z` | 운영 배포 Version |
 | `latest` | 승인된 최신 운영 이미지 |
 
-기존 검증 이미지:
+현재 운영 Backend 이미지:
 
 ```text
-quay.io/melona240/cnc-wearpoint-backend:v0.2
+quay.io/melona240/cnc-wearpoint-backend:v0.1.5
 ```
 
 운영 CI/CD에서는 Commit SHA 기반 이미지를 생성한 뒤 Version Tag와 `latest`로 승격하여 배포합니다.
@@ -355,6 +363,8 @@ NHN Cloud RDS for MySQL
 
 로컬 MySQL 데이터를 NHN Cloud RDS로 이전했으며, App VM에서 RDS 연결 및 API 조회를 검증했습니다.
 
+Object Storage 전환 시 `measurements.image_path`와 `sensor_path`도 실제 Object Storage Key에 맞춰 마이그레이션했습니다. 현재 유효 이미지 824건은 `images/...`, 센서 895건은 `sensors/...` 형식으로 관리합니다. 품질 기준 미달 이미지 9건은 후속 상태 컬럼 추가 전까지 기존 경로 정보를 유지합니다.
+
 ### 8.2 MLflow Tracking / Registry DB
 
 `mlflow` Database는 MLflow의 Backend Store로 사용합니다.
@@ -374,6 +384,8 @@ RDS MySQL
 ```
 
 테스트 Experiment와 Run을 생성하고 Parameter 및 Metric 데이터가 RDS에 정상 저장되는 것을 확인했습니다.
+
+또한 임시 Regression Model을 이용해 Model Registry 생명주기 테스트를 수행했습니다. V1 등록 및 `champion` 지정, V2 등록 및 `candidate` 지정, `champion`의 V2 승격, alias 기반 Model Load, V1 Rollback까지 정상 동작하는 것을 확인했습니다.
 
 ### 8.3 MLflow 인증 DB
 
@@ -416,9 +428,9 @@ Nginx Reverse Proxy
   ▼
 App VM
   │
-  │ VPC Internal
-  ▼
-RDS for MySQL
+  ├── VPC Internal → RDS for MySQL
+  │
+  └── S3-compatible API → NHN Cloud Object Storage
 ```
 
 RDS는 외부 인터넷에 직접 노출하지 않고 Private Network에 배치하여 App VM에서 필요한 Database 접근만 허용하도록 구성했습니다.
@@ -434,21 +446,50 @@ systemd
 MLflow Tracking Server
   │
   ├── Tracking / Registry → RDS mlflow
-  └── Basic Auth          → RDS mlflow_auth
+  ├── Basic Auth          → RDS mlflow_auth
+  └── Model / Run Artifact → Object Storage
 ```
 
 외부 접근은 5000 Port를 직접 공개하지 않고 Nginx와 HTTPS를 통해 `/mlflow/` 경로로 제공합니다.
 
 ### 8.6 Object Storage
 
-향후 이미지 원본·처리 데이터 및 MLflow Model Artifact를 NHN Cloud Object Storage로 분리하여 관리할 예정입니다.
+서비스 파일과 MLflow Artifact를 Database 또는 App VM 로컬 디스크에 직접 종속시키지 않고 NHN Cloud Object Storage의 Private Bucket으로 분리하여 관리합니다.
 
 ```text
 NHN Cloud Object Storage
-├── 이미지 원본
-├── 처리 이미지 / 센서 데이터
-└── MLflow Model Artifacts
+│
+├── cnc-wearpoint-data
+│   ├── images/
+│   │   └── set4~set11/original/
+│   └── sensors/
+│       └── set4~set11/
+│
+└── cnc-wearpoint-mlflow
+    └── mlflow-artifacts/
 ```
+
+`cnc-wearpoint-data`에는 MATWI 유효 이미지 824개와 센서 CSV 895개, 총 1,719개 객체를 저장했습니다. FastAPI는 `STORAGE_BACKEND=s3` 운영 설정에서 boto3를 사용해 Private Bucket의 객체를 조회하고, `/api/images/...`와 `/api/sensors/...`를 통해 Streaming Response로 제공합니다.
+
+운영 Backend Container의 로컬 `storage` Volume Mount를 제거한 상태에서도 이미지와 센서 API가 `HTTP 200`으로 정상 응답하는 것을 확인하여, 운영 파일 조회가 App VM 로컬 파일에 의존하지 않음을 검증했습니다.
+
+`cnc-wearpoint-mlflow`는 MLflow Artifact Store로 사용하며, Model 및 Run Artifact가 S3 호환 API를 통해 Object Storage에 저장되는 것을 E2E로 검증했습니다.
+
+두 Bucket 모두 `PRIVATE` 정책을 유지하며, 브라우저가 Object Storage에 직접 접근하지 않고 FastAPI 또는 MLflow를 통해 인증된 경로로 접근하도록 구성합니다.
+
+### 8.7 RDS TLS / CA 검증
+
+FastAPI와 MLflow의 RDS 연결은 `REQUIRE SSL` 계정을 사용하며 실제 Session에서 TLS 1.3 연결을 확인했습니다.
+
+NHN Cloud RDS에서 발급한 CA File을 App VM에 배치하고 다음 연결에 CA Certificate Verification을 적용했습니다.
+
+```text
+FastAPI        → RDS cnc_wearpoint  : TLS 1.3 + CA 검증
+MLflow         → RDS mlflow         : TLS 1.3 + CA 검증
+MLflow Auth    → RDS mlflow_auth    : TLS 1.3 + CA 검증
+```
+
+운영 Secret은 `/etc/cnc-wearpoint/*.env` 및 `/etc/mlflow/mlflow.env`에서 관리하며 Git에 Commit하지 않습니다. GitLab Runner는 배포 전용 Group을 통해 필요한 env 파일만 읽을 수 있도록 제한합니다.
 
 세부 내용은 다음 문서에서 확인할 수 있습니다.
 
@@ -512,6 +553,8 @@ NHN Cloud App VM
 
 로컬 `pytest` 실행 방법은 [자동 테스트](#5-자동-테스트)에 있으며, 현재 GitLab CI Pipeline에는 자동 테스트가 포함되어 있지 않습니다.
 
+`v0.1.5` 운영 배포에서 GitLab Runner의 env 파일 권한 문제를 수정한 뒤 Version Tag 기반 Promote 및 Production Deploy까지 E2E로 검증했습니다.
+
 ---
 
 ## 10. 개발 상태
@@ -552,17 +595,26 @@ NHN Cloud App VM
 - Nginx HTTPS `/mlflow/` Reverse Proxy 구성
 - GitHub Actions를 통한 GitHub → GitLab Source / Tag 동기화 설정
 - GitLab CI의 Quay.io Image Build·승격 및 운영 VM 배포 단계 구성
+- `v0.1.5` Version Tag 기반 운영 배포 E2E 검증
+- MLflow Artifact Store → NHN Cloud Object Storage 연동 및 E2E 업로드 검증
+- MLflow Model Registry 임시 모델 생명주기 검증(V1/V2, `candidate`, `champion`, Rollback)
+- `cnc-wearpoint-data` Private Bucket 구성
+- MATWI 이미지 824개·센서 895개 Object Storage 이전 및 객체 수·용량 검증
+- FastAPI Object Storage 기반 이미지·센서 Streaming 조회 적용
+- `measurements.image_path` / `sensor_path` Object Storage Key 마이그레이션
+- Backend Container 로컬 `storage` Volume Mount 제거 후 Object Storage-only 조회 검증
+- RDS `REQUIRE SSL` 및 TLS 1.3 연결 검증
+- FastAPI / MLflow / MLflow Auth의 RDS CA Certificate Verification 적용
 
 ### 진행 예정
 
-- AI 모델과 FastAPI Prediction API 직접 연동
-- FastAPI와 MLflow Model Registry 기반 모델 조회 및 Load 연동
-- MLflow Registered Model / Model Version 운영 검증
-- NHN Cloud Object Storage 구성
-- 이미지·처리 데이터의 Object Storage 저장 구조 적용
-- MLflow Artifact Store → Object Storage 연동
-- CI/CD 운영 배포 Pipeline 최종 E2E 검증
-- 운영 환경 보안 및 문서 최종 정리
+- 실제 AI 모델을 MLflow Model Registry에 등록
+- FastAPI와 MLflow Model Registry의 `champion` Alias 기반 Model Load 연동
+- 실제 모델 입력 전처리와 Prediction API 연결
+- 예측 결과의 `predictions` / `alerts` 저장 및 Frontend E2E 검증
+- 품질 기준 미달 이미지 9건의 상태·제외 사유를 표현하는 Schema 보강
+- 필요 시 RDS X.509 / mTLS 기반 Client Certificate 인증 추가
+- 운영 문서와 아키텍처 구성도 최종 정리
 
 ---
 
