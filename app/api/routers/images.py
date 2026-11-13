@@ -1,13 +1,23 @@
+import mimetypes
 import re
 from urllib.parse import quote
 
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
-from app.services.storage import get_image_path
+from app.services.storage import (
+    get_image_path,
+    get_object_storage_object,
+    list_object_names,
+    using_object_storage,
+)
 
 
-router = APIRouter(prefix="/api/images", tags=["이미지 조회"])
+router = APIRouter(
+    prefix="/api/images",
+    tags=["이미지 조회"],
+)
 
 IMAGE_NAME_PATTERN = re.compile(
     r"[A-Za-z0-9_.-]+\.(?:png|jpe?g)",
@@ -35,41 +45,33 @@ def natural_key(name: str):
     ]
 
 
-#Set별 이미지 목록 조회
 @router.get("/{set_id}")
 def list_images(set_id: str):
-    """선택한 Set의 서버 이미지 목록을 반환합니다."""
+    """선택한 Set의 이미지 목록을 반환합니다."""
     normalized_set = validate_set(set_id)
-    folder = get_image_path(
-        f"images/{normalized_set}/original"
-    )
 
-    if not folder.is_dir():
-        return {
-            "set_name": f"Set{normalized_set[3:]}",
-            "total": 0,
-            "items": [],
-        }
+    prefix = f"images/{normalized_set}/original"
+
+    try:
+        names = list_object_names(prefix)
+    except ClientError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Object Storage 이미지 목록 조회에 실패했습니다.",
+        ) from exc
 
     items = []
 
-    for candidate in folder.iterdir():
-        if not IMAGE_NAME_PATTERN.fullmatch(candidate.name):
-            continue
-
-        path = get_image_path(
-            f"images/{normalized_set}/original/{candidate.name}"
-        )
-
-        if not path.is_file():
+    for name in names:
+        if not IMAGE_NAME_PATTERN.fullmatch(name):
             continue
 
         items.append(
             {
-                "name": candidate.name,
+                "name": name,
                 "url": (
                     f"/api/images/{normalized_set}/"
-                    f"{quote(candidate.name, safe='')}"
+                    f"{quote(name, safe='')}"
                 ),
             }
         )
@@ -83,10 +85,9 @@ def list_images(set_id: str):
     }
 
 
-#Set별 이미지 파일 조회
 @router.get("/{set_id}/{filename}")
 def get_image(set_id: str, filename: str):
-    """서버에 저장된 PNG 또는 JPG 이미지를 반환합니다."""
+    """선택한 Set의 PNG 또는 JPG 이미지를 반환합니다."""
     normalized_set = validate_set(set_id)
 
     if not IMAGE_NAME_PATTERN.fullmatch(filename):
@@ -95,14 +96,62 @@ def get_image(set_id: str, filename: str):
             detail="허용되지 않는 이미지 파일명입니다.",
         )
 
-    path = get_image_path(
+    object_key = (
         f"images/{normalized_set}/original/{filename}"
     )
 
-    if not path.is_file():
+    # 로컬 개발 환경
+    if not using_object_storage():
+        path = get_image_path(object_key)
+
+        if not path.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail="이미지 파일을 찾을 수 없습니다.",
+            )
+
+        return FileResponse(path)
+
+    # NHN Object Storage 운영 환경
+    try:
+        response = get_object_storage_object(object_key)
+    except ClientError as exc:
+        error_code = exc.response.get(
+            "Error", {}
+        ).get("Code", "")
+
+        if error_code in {
+            "404",
+            "NoSuchKey",
+            "NotFound",
+        }:
+            raise HTTPException(
+                status_code=404,
+                detail="이미지 파일을 찾을 수 없습니다.",
+            ) from exc
+
         raise HTTPException(
-            status_code=404,
-            detail="이미지 파일을 찾을 수 없습니다.",
+            status_code=502,
+            detail="Object Storage 이미지 조회에 실패했습니다.",
+        ) from exc
+
+    body = response["Body"]
+
+    media_type = (
+        mimetypes.guess_type(filename)[0]
+        or response.get("ContentType")
+        or "application/octet-stream"
+    )
+
+    headers = {}
+
+    if response.get("ContentLength") is not None:
+        headers["Content-Length"] = str(
+            response["ContentLength"]
         )
 
-    return FileResponse(path)
+    return StreamingResponse(
+        body.iter_chunks(chunk_size=1024 * 1024),
+        media_type=media_type,
+        headers=headers,
+    )
