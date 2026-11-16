@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routers.health import router as health_router
 from app.api.routers.images import router as images_router
 
+from app.api.routers.manual_inputs import router as manual_inputs_router
 from app.core.config import get_cors_origins
 
 
@@ -51,3 +52,5 @@ app.include_router(alerts_router)
 app.include_router(monitoring_router)
 
 app.include_router(monitoring_alerts_router)
+
+app.include_router(manual_inputs_router)

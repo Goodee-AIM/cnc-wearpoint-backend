@@ -22,3 +22,4 @@ storage/
 
 # 임시 예측 테스트 데이터
 rf_test_predictions.csv
+/manual-inputs/

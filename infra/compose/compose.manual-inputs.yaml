@@ -1,0 +1,9 @@
+# Merge with the actual production Compose file; backend service name must match.
+services:
+  backend:
+    environment:
+      MANUAL_INPUT_ROOT: /manual-inputs
+    volumes:
+      - cnc_manual_inputs:/manual-inputs
+volumes:
+  cnc_manual_inputs:
