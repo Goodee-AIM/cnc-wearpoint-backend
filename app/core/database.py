@@ -14,6 +14,16 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 def get_connection():
     """MySQL 연결을 생성합니다."""
+    # Production keeps CA verification by default. Local development may explicitly opt out.
+    ssl_options = (
+        {"ssl_disabled": True}
+        if os.getenv("DB_SSL_ENABLED", "1") == "0"
+        else {
+            "ssl_ca": os.getenv("DB_SSL_CA", "/etc/mysql/certs/ca.pem"),
+            "ssl_verify_cert": True,
+            "ssl_verify_identity": False,
+        }
+    )
     return mysql.connector.connect(
         host=os.getenv("DB_HOST", "127.0.0.1"),
         port=int(os.getenv("DB_PORT", "3306")),
@@ -22,9 +32,7 @@ def get_connection():
         database=os.getenv("DB_NAME", "cnc_wearpoint"),
         charset="utf8mb4",
         connection_timeout=5,
-        ssl_ca=os.getenv("DB_SSL_CA", "/etc/mysql/certs/ca.pem"),
-        ssl_verify_cert=True,
-        ssl_verify_identity=False,
+        **ssl_options,
     )
 
 

@@ -133,6 +133,50 @@ def list_inputs():
     return {"items": sorted(items, key=lambda item: item["created_at"], reverse=True)}
 
 
+# Playlists reference existing UUID records; they never alter shared monitoring.
+def playlist_dir():
+    folder = root() / ".playlists"
+    folder.mkdir(exist_ok=True)
+    return folder
+
+
+def expand_playlist(data):
+    return {**data, "items": [get_input(identifier) for identifier in data["item_ids"]]}
+
+
+@router.get("/playlists")
+def list_playlists():
+    items = [expand_playlist(json.loads(p.read_text(encoding="utf-8"))) for p in playlist_dir().glob("*.json")]
+    return {"items": sorted(items, key=lambda item: item["created_at"], reverse=True)}
+
+
+@router.post("/playlists", status_code=201)
+async def create_playlist(request: Request):
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > 65536:
+            raise HTTPException(413, "재생 목록 요청이 너무 큽니다.")
+    try:
+        payload = json.loads(body)
+        ids = payload["item_ids"]
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 1000 or not all(isinstance(item, str) for item in ids) or len(set(ids)) != len(ids):
+            raise ValueError()
+        name = str(payload.get("name") or "Set test")[:200]
+    except (ValueError, KeyError, TypeError, UnicodeError):
+        raise HTTPException(422, "유효한 입력 ID 목록이 필요합니다.")
+    # Validate all referenced records before publishing the ordered list.
+    for identifier in ids:
+        entry_path(identifier)
+    data = {"id": uuid.uuid4().hex, "name": name, "item_ids": ids,
+            "created_at": datetime.now(timezone.utc).isoformat()}
+    folder = playlist_dir()
+    temporary = folder / (data["id"] + ".tmp")
+    temporary.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    temporary.rename(folder / (data["id"] + ".json"))
+    return expand_playlist(data)
+
+
 @router.get("/{identifier}")
 def get_input(identifier: str):
     return json.loads((entry_path(identifier) / "metadata.json").read_text(encoding="utf-8"))
