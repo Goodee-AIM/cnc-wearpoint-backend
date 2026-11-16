@@ -22,6 +22,9 @@ def get_connection():
         database=os.getenv("DB_NAME", "cnc_wearpoint"),
         charset="utf8mb4",
         connection_timeout=5,
+        ssl_ca=os.getenv("DB_SSL_CA", "/etc/mysql/certs/ca.pem"),
+        ssl_verify_cert=True,
+        ssl_verify_identity=False,
     )
 
 

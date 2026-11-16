@@ -5,7 +5,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import httpx
+try:
+    import httpx2 as httpx
+except ImportError:
+    import httpx
 from fastapi import FastAPI
 from app.api.routers.manual_inputs import router
 
