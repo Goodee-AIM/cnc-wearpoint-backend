@@ -9,6 +9,8 @@ from app.api.routers.alerts import router as alerts_router
 from app.api.routers.sets import router as sets_router
 from app.api.routers.sensors import router as sensors_router
 
+from app.api.routers.measurements import router as measurements_router
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -54,3 +56,5 @@ app.include_router(monitoring_router)
 app.include_router(monitoring_alerts_router)
 
 app.include_router(manual_inputs_router)
+
+app.include_router(measurements_router)
