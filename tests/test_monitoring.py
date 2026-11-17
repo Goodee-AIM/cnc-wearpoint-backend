@@ -353,14 +353,23 @@ def test_restart_records_due_alerts_and_resumes_paused_playback(setup):
         assert client.get('/api/monitoring/state').json()['elapsed_ms'] == 2000
 
 
-def test_restart_requires_operator_token_and_schedule(setup, monkeypatch):
-    with TestClient(app) as client:
-        assert client.post('/api/monitoring/restart').status_code == 403
-        assert client.post('/api/monitoring/restart', headers=TOKEN).status_code == 409
-        assert client.get('/api/monitoring/state').json()['session_id'] is None
-        monkeypatch.delenv('MONITORING_CONTROL_TOKEN')
-        assert client.post('/api/monitoring/restart', headers=TOKEN).status_code == 503
+def test_restart_without_token_requires_schedule(setup, monkeypatch):
+    monkeypatch.delenv("MONITORING_CONTROL_TOKEN", raising=False)
 
+    with TestClient(app) as client:
+        # 재생 일정이 없으면 재시작 불가
+        assert client.post("/api/monitoring/restart").status_code == 409
+        assert client.get("/api/monitoring/state").json()["session_id"] is None
+
+        # 일정 준비 후 비밀번호 없이 재시작
+        initial = monitoring.start()
+        response = client.post("/api/monitoring/restart")
+
+        assert response.status_code == 200
+        state = response.json()
+        assert state["status"] == "running"
+        assert state["elapsed_ms"] == 0
+        assert state["session_id"] == initial["session_id"]
 
 def test_restart_browser_control_header_is_allowed(setup):
     from fastapi import FastAPI
