@@ -8,22 +8,35 @@ default:
     - cnc-wp-runner
 
 variables:
+  # Main Backend image
   IMAGE_REPO: "quay.io/melona240/cnc-wearpoint-backend"
 
-# main 커밋 기준 Docker 이미지 1회 빌드 및 SHA 태그 Push
+  # AI Model Serving image
+  SERVING_IMAGE_REPO: "quay.io/melona240/cnc-wearpoint-serving"
+
+
+# ============================================================
+# Main Backend
+# ============================================================
+
+# main 커밋 기준 Backend Docker 이미지 1회 빌드 및 SHA 태그 Push
 build_image:
   stage: image
+
   script:
     - echo "$QUAY_TOKEN" | docker login quay.io -u "$QUAY_USERNAME" --password-stdin
     - docker build -t "$IMAGE_REPO:$CI_COMMIT_SHA" .
     - docker push "$IMAGE_REPO:$CI_COMMIT_SHA"
     - docker logout quay.io
+
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
-# 검증된 SHA 이미지를 버전 태그와 latest로 승격
+
+# 검증된 Backend SHA 이미지를 버전 태그와 latest로 승격
 promote_image:
   stage: promote
+
   script:
     - echo "$QUAY_TOKEN" | docker login quay.io -u "$QUAY_USERNAME" --password-stdin
     - docker pull "$IMAGE_REPO:$CI_COMMIT_SHA"
@@ -32,10 +45,12 @@ promote_image:
     - docker push "$IMAGE_REPO:$CI_COMMIT_TAG"
     - docker push "$IMAGE_REPO:latest"
     - docker logout quay.io
+
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
 
-# 승인된 버전 이미지를 운영 VM에 자동 배포
+
+# 승인된 Backend 버전 이미지를 운영 VM에 자동 배포
 deploy_backend:
   stage: deploy
 
@@ -52,13 +67,16 @@ deploy_backend:
     # Backend 기동 대기
     - |
       READY=0
+
       for i in 1 2 3 4 5 6 7 8 9 10; do
         if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
           READY=1
           break
         fi
+
         sleep 2
       done
+
       test "$READY" -eq 1
 
     # 외부 HTTPS 및 RDS 연동 API 검증
@@ -71,3 +89,48 @@ deploy_backend:
 
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+
+
+# ============================================================
+# AI Model Serving Service
+# ============================================================
+
+# ml/serving 변경 시 CPU 전용 Serving 이미지 빌드 및 SHA 태그 Push
+build_serving_image:
+  stage: image
+
+  script:
+    - echo "$QUAY_TOKEN" | docker login quay.io -u "$QUAY_USERNAME" --password-stdin
+
+    # ml/serving을 Build Context로 사용
+    - docker build -f ml/serving/Dockerfile -t "$SERVING_IMAGE_REPO:$CI_COMMIT_SHA" ml/serving
+
+    - docker push "$SERVING_IMAGE_REPO:$CI_COMMIT_SHA"
+    - docker logout quay.io
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - ml/serving/**/*
+
+
+# 검증된 Serving SHA 이미지를 serving-v* 버전으로 승격
+promote_serving_image:
+  stage: promote
+
+  script:
+    - echo "$QUAY_TOKEN" | docker login quay.io -u "$QUAY_USERNAME" --password-stdin
+
+    # main 빌드에서 생성한 동일 Commit SHA 이미지 사용
+    - docker pull "$SERVING_IMAGE_REPO:$CI_COMMIT_SHA"
+
+    # Git tag: serving-v0.1.0
+    # Quay tag: v0.1.0
+    - SERVING_VERSION="${CI_COMMIT_TAG#serving-}"
+    - docker tag "$SERVING_IMAGE_REPO:$CI_COMMIT_SHA" "$SERVING_IMAGE_REPO:$SERVING_VERSION"
+
+    - docker push "$SERVING_IMAGE_REPO:$SERVING_VERSION"
+    - docker logout quay.io
+
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^serving-v[0-9]+\.[0-9]+\.[0-9]+$/'
