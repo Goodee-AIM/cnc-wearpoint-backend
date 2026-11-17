@@ -22,10 +22,10 @@ def populated(setup, monkeypatch):
     with sqlite3.connect(path) as connection:
         connection.executescript("""
             INSERT INTO wear_labels VALUES
-                (1,60,'flank_wear'),(2,100,'adhesion'),(3,120,'flank_wear');
-            INSERT INTO predictions VALUES
+                (1,150,'flank_wear'),(2,200,'adhesion'),(3,250,'flank_wear');
+            INSERT INTO predictions (id,measurement_id,predicted_wear_um,warning_threshold_um,danger_threshold_um,predicted_at) VALUES
                 (501,2,20,50,90,'2026-11-11 00:00:00'),
-                (701,3,95,50,90,'2026-11-11 00:00:00');
+                (701,3,200,50,90,'2026-11-11 00:00:00');
             INSERT INTO alerts VALUES
                 (1,501,'danger','legacy (100.00 μm)','2026-11-11 10:00:00',NULL);
         """)
@@ -51,11 +51,11 @@ def test_worker_generates_all_sets_without_browser_and_does_not_duplicate(popula
     assert {row["session_id"] for row in events} == {started["session_id"]}
     label_only = next(row for row in events if row["measurement_id"] == 1)
     assert label_only["prediction_id"] is None
-    assert label_only["judged_wear_um"] == 60
+    assert label_only["judged_wear_um"] == 150
     caught_up = next(row for row in events if row["measurement_id"] == 2)
     assert datetime.fromisoformat(caught_up["created_at"]) == clock[0] - timedelta(seconds=15)
     assert datetime.fromisoformat(caught_up["recorded_at"]) == clock[0]
-    assert caught_up["level"] == "danger"  # label 100, prediction 20
+    assert caught_up["level"] == "danger"  # label 200, prediction 20
 
 
 def test_pause_flushes_before_stopping_and_reset_preserves_history(populated):
@@ -92,7 +92,7 @@ def test_prediction_added_later_is_recorded_for_reached_measurement(populated):
     monitoring.start()
     assert len(rows(path)) == 1
     with sqlite3.connect(path) as connection:
-        connection.execute("INSERT INTO predictions VALUES (702,3,92,50,90,'2026-11-11 01:00:00')")
+        connection.execute("INSERT INTO predictions (id,measurement_id,predicted_wear_um,warning_threshold_um,danger_threshold_um,predicted_at) VALUES (702,3,200,50,90,'2026-11-11 01:00:00')")
     monitoring_alerts.process_due_alerts()
     assert len(rows(path)) == 2
     assert any(row["prediction_id"] == 702 for row in rows(path))
@@ -212,7 +212,7 @@ def test_label_event_becomes_confirmable_when_prediction_arrives_later(populated
         event = next(row for row in before["items"] if row["measurement_id"] == 1)
         assert not event["can_acknowledge"]
         with sqlite3.connect(path) as connection:
-            connection.execute("INSERT INTO predictions VALUES (900,1,45,50,90,'2026-11-11 02:00:00')")
+            connection.execute("INSERT INTO predictions (id,measurement_id,predicted_wear_um,warning_threshold_um,danger_threshold_um,predicted_at) VALUES (900,1,45,50,90,'2026-11-11 02:00:00')")
         after = client.get("/api/monitoring/alerts").json()
         changed = next(row for row in after["items"] if row["id"] == event["id"])
         assert after["total"] == before["total"]

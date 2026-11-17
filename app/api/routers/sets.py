@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException, Path, Query
 
 from app.core.database import get_connection
+from app.core.wear_policy import WARNING_UM, DANGER_UM, wear_level
+from app.core.wear_policy import wear_level, WARNING_UM, DANGER_UM
 
 
 router = APIRouter(prefix="/api/sets", tags=["Set 조회"])
@@ -136,6 +138,13 @@ def get_measurements(
 
             # 예측 마모량과 정답 마모량을 서로 구분하여 반환합니다.
             for item in items:
+                # 저장된 모델 상태와 과거 알림을 수정하지 않고 현재 판정을 반환합니다.
+                item["prediction_status"] = wear_level(item["predicted_wear_um"])
+                item["warning_threshold_um"] = float(WARNING_UM)
+                item["danger_threshold_um"] = float(DANGER_UM)
+                item["prediction_status"] = wear_level(item["predicted_wear_um"])
+                item["warning_threshold_um"] = float(WARNING_UM)
+                item["danger_threshold_um"] = float(DANGER_UM)
                 for field in ("original_wear_um", "predicted_wear_um"):
                     if item[field] is not None:
                         item[field] = float(item[field])

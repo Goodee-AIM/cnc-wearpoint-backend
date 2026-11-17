@@ -105,7 +105,7 @@ def setup(tmp_path, monkeypatch):
             CREATE TABLE predictions (
                 id INTEGER PRIMARY KEY, measurement_id INTEGER, predicted_wear_um REAL,
                 warning_threshold_um REAL DEFAULT 50, danger_threshold_um REAL DEFAULT 90,
-                predicted_at TEXT
+                predicted_at TEXT, predicted_type TEXT
             );
             CREATE TABLE alerts (
                 id INTEGER PRIMARY KEY, prediction_id INTEGER, level TEXT, message TEXT,
@@ -309,8 +309,8 @@ def test_missing_migration_returns_actionable_error(monkeypatch):
 def test_restart_keeps_session_and_acknowledged_history(setup):
     path, clock = setup
     with sqlite3.connect(path) as connection:
-        connection.execute("INSERT INTO wear_labels VALUES (1,90,'flank_wear')")
-        connection.execute("INSERT INTO wear_labels VALUES (2,75,'flank_wear')")
+        connection.execute("INSERT INTO wear_labels VALUES (1,200,'flank_wear')")
+        connection.execute("INSERT INTO wear_labels VALUES (2,150,'flank_wear')")
         connection.execute("INSERT INTO alerts VALUES (77,NULL,'warning','legacy','2026-01-01',NULL)")
     with TestClient(app) as client:
         initial = client.post('/api/monitoring/start', headers=TOKEN).json()
@@ -335,8 +335,8 @@ def test_restart_keeps_session_and_acknowledged_history(setup):
 def test_restart_records_due_alerts_and_resumes_paused_playback(setup):
     path, clock = setup
     with sqlite3.connect(path) as connection:
-        connection.execute("INSERT INTO wear_labels VALUES (1,90,'flank_wear')")
-        connection.execute("INSERT INTO wear_labels VALUES (2,75,'flank_wear')")
+        connection.execute("INSERT INTO wear_labels VALUES (1,200,'flank_wear')")
+        connection.execute("INSERT INTO wear_labels VALUES (2,150,'flank_wear')")
     with TestClient(app) as client:
         initial = client.post('/api/monitoring/start', headers=TOKEN).json()
         clock[0] += timedelta(seconds=11)
@@ -353,14 +353,23 @@ def test_restart_records_due_alerts_and_resumes_paused_playback(setup):
         assert client.get('/api/monitoring/state').json()['elapsed_ms'] == 2000
 
 
-def test_restart_requires_operator_token_and_schedule(setup, monkeypatch):
-    with TestClient(app) as client:
-        assert client.post('/api/monitoring/restart').status_code == 403
-        assert client.post('/api/monitoring/restart', headers=TOKEN).status_code == 409
-        assert client.get('/api/monitoring/state').json()['session_id'] is None
-        monkeypatch.delenv('MONITORING_CONTROL_TOKEN')
-        assert client.post('/api/monitoring/restart', headers=TOKEN).status_code == 503
+def test_restart_without_token_requires_schedule(setup, monkeypatch):
+    monkeypatch.delenv("MONITORING_CONTROL_TOKEN", raising=False)
 
+    with TestClient(app) as client:
+        # 재생 일정이 없으면 재시작 불가
+        assert client.post("/api/monitoring/restart").status_code == 409
+        assert client.get("/api/monitoring/state").json()["session_id"] is None
+
+        # 일정 준비 후 비밀번호 없이 재시작
+        initial = monitoring.start()
+        response = client.post("/api/monitoring/restart")
+
+        assert response.status_code == 200
+        state = response.json()
+        assert state["status"] == "running"
+        assert state["elapsed_ms"] == 0
+        assert state["session_id"] == initial["session_id"]
 
 def test_restart_browser_control_header_is_allowed(setup):
     from fastapi import FastAPI
