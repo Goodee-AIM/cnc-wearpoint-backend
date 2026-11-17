@@ -187,3 +187,22 @@ def reset():
         """, (state["session_id"], state["status"], state["resumed_at"]))
         # 새 세션 알림은 commit 이후 worker가 기록합니다. 이 응답 시점의 새 집계는 0건입니다.
         return state_response(state, items, now)
+
+
+@router.post("/restart", dependencies=[Depends(require_control_token)])
+def restart():
+    """알림 기록과 세션은 유지하고 전체 재생 위치만 되돌립니다."""
+    with monitoring_cursor() as cursor:
+        state = read_state(cursor, exclusive=True)
+        items = read_items(cursor)
+        if not state["session_id"] or not items:
+            raise HTTPException(409, "공통 재생 일정을 먼저 시작하세요.")
+        now = read_clock(cursor)
+        emit_due_alerts(cursor, state, now)
+        cursor.execute("""
+            UPDATE monitoring_state SET status = 'running', elapsed_ms = 0,
+                resumed_at = %s, revision = revision + 1 WHERE id = 1
+        """, (now,))
+        state.update(status="running", elapsed_ms=0, resumed_at=now,
+                     revision=state["revision"] + 1)
+        return state_response(state, items, now)

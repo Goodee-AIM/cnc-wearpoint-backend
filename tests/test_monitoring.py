@@ -304,3 +304,77 @@ def test_missing_migration_returns_actionable_error(monkeypatch):
         response = client.get("/api/monitoring/state")
         assert response.status_code == 503
         assert "20261111_monitoring.sql" in response.json()["detail"]
+
+
+def test_restart_keeps_session_and_acknowledged_history(setup):
+    path, clock = setup
+    with sqlite3.connect(path) as connection:
+        connection.execute("INSERT INTO wear_labels VALUES (1,90,'flank_wear')")
+        connection.execute("INSERT INTO wear_labels VALUES (2,75,'flank_wear')")
+        connection.execute("INSERT INTO alerts VALUES (77,NULL,'warning','legacy','2026-01-01',NULL)")
+    with TestClient(app) as client:
+        initial = client.post('/api/monitoring/start', headers=TOKEN).json()
+        with sqlite3.connect(path) as connection:
+            connection.execute("UPDATE monitoring_alert_events SET detail_confirmed_at='2026-11-11 01:30:01'")
+            before = connection.execute('SELECT * FROM monitoring_alert_events').fetchall()
+        clock[0] += timedelta(seconds=5)
+        response = client.post('/api/monitoring/restart', headers=TOKEN)
+        assert response.status_code == 200
+        state = response.json()
+        assert state['session_id'] == initial['session_id']
+        assert state['revision'] == initial['revision'] + 1
+        assert state['elapsed_ms'] == 0
+        assert all(row['elapsed_ms'] == 0 for row in state['sets'] if row['status'] != 'empty')
+        client.post('/api/monitoring/pause', headers=TOKEN)
+        with sqlite3.connect(path) as connection:
+            assert connection.execute('SELECT * FROM monitoring_alert_events').fetchall() == before
+            assert connection.execute('SELECT COUNT(*) FROM alerts').fetchone()[0] == 1
+            assert connection.execute('SELECT COUNT(*) FROM monitoring_items').fetchone()[0] == 3
+
+
+def test_restart_records_due_alerts_and_resumes_paused_playback(setup):
+    path, clock = setup
+    with sqlite3.connect(path) as connection:
+        connection.execute("INSERT INTO wear_labels VALUES (1,90,'flank_wear')")
+        connection.execute("INSERT INTO wear_labels VALUES (2,75,'flank_wear')")
+    with TestClient(app) as client:
+        initial = client.post('/api/monitoring/start', headers=TOKEN).json()
+        clock[0] += timedelta(seconds=11)
+        assert client.post('/api/monitoring/restart', headers=TOKEN).status_code == 200
+        with sqlite3.connect(path) as connection:
+            assert connection.execute('SELECT COUNT(*) FROM monitoring_alert_events').fetchone()[0] == 2
+        client.post('/api/monitoring/pause', headers=TOKEN)
+        clock[0] += timedelta(seconds=20)
+        state = client.post('/api/monitoring/restart', headers=TOKEN).json()
+        assert state['status'] == 'running'
+        assert state['elapsed_ms'] == 0
+        assert state['session_id'] == initial['session_id']
+        clock[0] += timedelta(seconds=2)
+        assert client.get('/api/monitoring/state').json()['elapsed_ms'] == 2000
+
+
+def test_restart_requires_operator_token_and_schedule(setup, monkeypatch):
+    with TestClient(app) as client:
+        assert client.post('/api/monitoring/restart').status_code == 403
+        assert client.post('/api/monitoring/restart', headers=TOKEN).status_code == 409
+        assert client.get('/api/monitoring/state').json()['session_id'] is None
+        monkeypatch.delenv('MONITORING_CONTROL_TOKEN')
+        assert client.post('/api/monitoring/restart', headers=TOKEN).status_code == 503
+
+
+def test_restart_browser_control_header_is_allowed(setup):
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+    options = next(m.kwargs.copy() for m in app.user_middleware if m.cls is CORSMiddleware)
+    options['allow_origins'] = ['http://localhost:5173']
+    browser_app = FastAPI()
+    browser_app.add_middleware(CORSMiddleware, **options)
+    browser_app.include_router(monitoring.router)
+    with TestClient(browser_app) as client:
+        response = client.options('/api/monitoring/restart', headers={
+            'Origin': 'http://localhost:5173',
+            'Access-Control-Request-Method': 'POST',
+            'Access-Control-Request-Headers': 'x-monitoring-control-token',
+        })
+        assert response.status_code == 200
+        assert 'x-monitoring-control-token' in response.headers['access-control-allow-headers'].lower()
