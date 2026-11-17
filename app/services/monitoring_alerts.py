@@ -2,9 +2,9 @@
 import asyncio
 import logging
 from datetime import timedelta
-from decimal import Decimal
 
 from app.core.database import get_connection
+from app.core.wear_policy import WARNING_UM, DANGER_UM, wear_level, alert_title
 from app.services.monitoring import elapsed_ms
 
 
@@ -19,7 +19,7 @@ def emit_due_alerts(cursor, state, now):
     cursor.execute("SELECT MAX(start_ms + duration_ms) AS total_ms FROM monitoring_items")
     total_ms = cursor.fetchone()["total_ms"] or 0
     if not total_ms:
-        returns
+        return
     # 현재 세션의 기록만 조회해 누락 회차를 복구합니다. 확인 상태는 덮어쓰지 않습니다.
     cursor.execute("""
         SELECT cycle_number, set_number, position FROM monitoring_alert_events
@@ -30,7 +30,7 @@ def emit_due_alerts(cursor, state, now):
     cursor.execute("""
         SELECT i.*, l.original_wear_um, l.original_type,
                p.id AS prediction_id, p.predicted_wear_um,
-               p.warning_threshold_um, p.danger_threshold_um
+               p.predicted_type
         FROM monitoring_items AS i
         LEFT JOIN wear_labels AS l ON l.measurement_id = i.measurement_id
         LEFT JOIN predictions AS p ON p.id = (
@@ -39,11 +39,11 @@ def emit_due_alerts(cursor, state, now):
             ORDER BY latest.predicted_at DESC, latest.id DESC LIMIT 1
         )
         WHERE (
-              (i.set_number BETWEEN 4 AND 9 AND l.original_wear_um >= 50)
-              OR (i.set_number IN (10,11) AND p.predicted_wear_um >= p.warning_threshold_um)
+              (i.set_number BETWEEN 4 AND 9 AND l.original_wear_um >= %s)
+              OR (i.set_number IN (10,11) AND p.predicted_wear_um >= %s)
           )
         ORDER BY i.start_ms, i.set_number, i.position
-    """)
+    """, (WARNING_UM, WARNING_UM))
     candidates = cursor.fetchall()
     for cycle_index in range(elapsed // total_ms + 1):
         for row in candidates:
@@ -53,10 +53,13 @@ def emit_due_alerts(cursor, state, now):
                 continue
             source = "label" if row["set_number"] < 10 else "prediction"
             wear = row["original_wear_um"] if source == "label" else row["predicted_wear_um"]
-            warning = Decimal(50) if source == "label" else row["warning_threshold_um"]
-            danger = Decimal(90) if source == "label" else row["danger_threshold_um"]
-            level = "danger" if wear >= danger else "warning"
-            title = "위험 · 공구 교체 필요" if level == "danger" else "경고 · 마모 상태 확인"
+            warning, danger = WARNING_UM, DANGER_UM
+            level = wear_level(wear)
+            if level not in ("warning", "danger"):
+                continue
+            # 기존 스냅샷 필드에 실제 판정에 사용한 유형을 저장합니다.
+            wear_type = row["original_type"] if source == "label" else row["predicted_type"]
+            title = alert_title(level, wear_type)
             # 재개 이전에 새로 추가된 결과는 현재 감지 시각으로 기록합니다.
             occurred_at = now
             if occurrence_ms >= state["elapsed_ms"]:
@@ -72,7 +75,7 @@ def emit_due_alerts(cursor, state, now):
             """, (
                 state["session_id"], cycle_number, row["set_number"], row["position"], row["measurement_id"],
                 row["prediction_id"], row["image_name"], row["sensor_name"], source, level,
-                wear, row["predicted_wear_um"], row["original_type"], warning, danger,
+                wear, row["predicted_wear_um"], wear_type, warning, danger,
                 f"{title} ({wear:.2f} μm)", occurred_at, now,
             ))
 

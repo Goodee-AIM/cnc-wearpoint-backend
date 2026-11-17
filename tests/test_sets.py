@@ -98,7 +98,9 @@ def test_measurements_returns_original_labels_and_predictions(client, database):
     assert original["original_type"] == "flank"
     assert original["predicted_wear_um"] == 55.4321
     assert original["model_version"] == "rf-csv-demo-v1"
-    assert original["prediction_status"] == "warning"
+    assert original["prediction_status"] == "normal"
+    assert original["warning_threshold_um"] == 150
+    assert original["danger_threshold_um"] == 200
     assert original["predicted_at"] == "2026-11-06T12:00:00"
     assert not {"source_image_id", "source_sensor_id", "actual_wear_um", "actual_type"} & original.keys()
     assert unpredicted["image_id"] is None
@@ -257,7 +259,7 @@ def test_actual_queries_select_latest_predictions_and_page_by_internal_set_id(cl
         assert predicted["prediction_id"] == 301
         assert predicted["predicted_wear_um"] == 55.0
         assert predicted["model_version"] == "v3"
-        assert predicted["prediction_status"] == "warning"
+        assert predicted["prediction_status"] == "normal"
         assert predicted["predicted_at"] == "2026-11-06 12:00:00"
         unpredicted = second["items"][0]
         assert unpredicted["image_id"] is None and unpredicted["sensor_id"] == 2

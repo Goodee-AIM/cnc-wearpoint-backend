@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel, PositiveInt
 
 from app.core.database import get_connection
+from app.core.wear_policy import wear_level, alert_title
 
 router = APIRouter(prefix="/api/alerts", tags=["알림"])
 
@@ -39,8 +40,10 @@ def create_alert(payload: AlertCreate):
     with alert_cursor() as cursor:
         cursor.execute(
             """
-            SELECT p.status, p.predicted_wear_um, l.original_wear_um
+            SELECT p.predicted_wear_um, p.predicted_type, l.original_wear_um, l.original_type, s.set_number
             FROM predictions AS p
+            JOIN measurements AS m ON m.id = p.measurement_id
+            JOIN tool_sets AS s ON s.set_id = m.set_id
             LEFT JOIN wear_labels AS l ON l.measurement_id = p.measurement_id
             WHERE p.id = %s
             """,
@@ -50,15 +53,16 @@ def create_alert(payload: AlertCreate):
         if prediction is None:
             raise HTTPException(404, "예측 결과가 없습니다.")
         wear = prediction["predicted_wear_um"]
-        level = prediction["status"]
+        wear_type = prediction["predicted_type"]
         if payload.source == "label":
+            if prediction["set_number"] in (10, 11):
+                raise HTTPException(422, "이 Set은 예측 결과로만 판정합니다.")
             wear = prediction["original_wear_um"]
-            if wear is None or wear < 50:
-                raise HTTPException(422, "경고·위험 라벨만 알림으로 저장할 수 있습니다.")
-            level = "danger" if wear >= 90 else "warning"
+            wear_type = prediction["original_type"]
+        level = wear_level(wear)
         if level not in ("warning", "danger"):
             raise HTTPException(422, "경고·위험 예측만 알림으로 저장할 수 있습니다.")
-        title = "경고 · 마모 상태 확인" if level == "warning" else "위험 · 공구 교체 필요"
+        title = alert_title(level, wear_type)
         message = f"{title} ({wear:.2f} μm)"
         cursor.execute(
             """

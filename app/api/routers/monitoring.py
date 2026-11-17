@@ -189,7 +189,7 @@ def reset():
         return state_response(state, items, now)
 
 
-@router.post("/restart", dependencies=[Depends(require_control_token)])
+@router.post("/restart")
 def restart():
     """알림 기록과 세션은 유지하고 전체 재생 위치만 되돌립니다."""
     with monitoring_cursor() as cursor:

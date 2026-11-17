@@ -105,7 +105,7 @@ def setup(tmp_path, monkeypatch):
             CREATE TABLE predictions (
                 id INTEGER PRIMARY KEY, measurement_id INTEGER, predicted_wear_um REAL,
                 warning_threshold_um REAL DEFAULT 50, danger_threshold_um REAL DEFAULT 90,
-                predicted_at TEXT
+                predicted_at TEXT, predicted_type TEXT
             );
             CREATE TABLE alerts (
                 id INTEGER PRIMARY KEY, prediction_id INTEGER, level TEXT, message TEXT,
@@ -309,8 +309,8 @@ def test_missing_migration_returns_actionable_error(monkeypatch):
 def test_restart_keeps_session_and_acknowledged_history(setup):
     path, clock = setup
     with sqlite3.connect(path) as connection:
-        connection.execute("INSERT INTO wear_labels VALUES (1,90,'flank_wear')")
-        connection.execute("INSERT INTO wear_labels VALUES (2,75,'flank_wear')")
+        connection.execute("INSERT INTO wear_labels VALUES (1,200,'flank_wear')")
+        connection.execute("INSERT INTO wear_labels VALUES (2,150,'flank_wear')")
         connection.execute("INSERT INTO alerts VALUES (77,NULL,'warning','legacy','2026-01-01',NULL)")
     with TestClient(app) as client:
         initial = client.post('/api/monitoring/start', headers=TOKEN).json()
@@ -335,8 +335,8 @@ def test_restart_keeps_session_and_acknowledged_history(setup):
 def test_restart_records_due_alerts_and_resumes_paused_playback(setup):
     path, clock = setup
     with sqlite3.connect(path) as connection:
-        connection.execute("INSERT INTO wear_labels VALUES (1,90,'flank_wear')")
-        connection.execute("INSERT INTO wear_labels VALUES (2,75,'flank_wear')")
+        connection.execute("INSERT INTO wear_labels VALUES (1,200,'flank_wear')")
+        connection.execute("INSERT INTO wear_labels VALUES (2,150,'flank_wear')")
     with TestClient(app) as client:
         initial = client.post('/api/monitoring/start', headers=TOKEN).json()
         clock[0] += timedelta(seconds=11)
