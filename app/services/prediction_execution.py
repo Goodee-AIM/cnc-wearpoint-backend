@@ -31,6 +31,14 @@ logger = logging.getLogger(__name__)
 MAX_IMAGE = 8 * 1024 * 1024
 MAX_SENSOR = 20 * 1024 * 1024
 WEAR_PRECISION = Decimal("0.00001")
+# A request timeout is 180 s, but Object Storage I/O can extend total duration.
+# Recovery is operator-initiated only; never auto-reset on application startup.
+MIN_RECOVERY_AGE_MINUTES = 30
+RECOVERY_SELECT = (
+    "SELECT status, prediction_claim_id, prediction_started_at, "
+    "(TIMESTAMPDIFF(SECOND, prediction_started_at, NOW(6)) >= %s) "
+    "AS is_stale FROM measurements WHERE id = %s"
+)
 
 
 def check_prediction_access(token: str | None):
@@ -62,6 +70,8 @@ def _db_operation(operation):
 
 
 def claim_measurement(measurement_id: int):
+    claim_id = uuid.uuid4().hex
+
     def operation(cursor):
         cursor.execute(
             "SELECT status, image_path, sensor_path FROM measurements "
@@ -75,12 +85,23 @@ def claim_measurement(measurement_id: int):
             raise HTTPException(422, "Measurement requires image and sensor CSV")
         if measurement["status"] not in ("ready", "failed"):
             raise HTTPException(409, "Measurement is not ready for prediction")
+        # Serialize against other claimers; prevent a second prediction for
+        # a measurement that already has persisted results.
         cursor.execute(
-            "UPDATE measurements SET status = 'predicting', error_message = NULL "
-            "WHERE id = %s",
+            "SELECT id FROM predictions WHERE measurement_id = %s LIMIT 1",
             (measurement_id,),
         )
-        return measurement["image_path"], measurement["sensor_path"]
+        if cursor.fetchone() is not None:
+            raise HTTPException(409, "Prediction already exists")
+        cursor.execute(
+            "UPDATE measurements SET status = 'predicting', error_message = NULL, "
+            "prediction_claim_id = %s, prediction_started_at = NOW(6) "
+            "WHERE id = %s",
+            (claim_id, measurement_id),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("Unable to claim measurement")
+        return measurement["image_path"], measurement["sensor_path"], claim_id
 
     return _db_operation(operation)
 
@@ -177,10 +198,27 @@ def validate_model_result(result: dict):
     return wear, wear_type, model_name, model_version, status
 
 
-def persist_prediction(measurement_id: int, result: dict) -> dict:
+def persist_prediction(measurement_id: int, result: dict, claim_id: str) -> dict:
     wear, wear_type, model_name, model_version, status = validate_model_result(result)
 
     def operation(cursor):
+        # Lock BEFORE inserting. A stale former worker must not commit a
+        # result after recovery or after a new worker has acquired the row.
+        cursor.execute(
+            "SELECT status, prediction_claim_id FROM measurements "
+            "WHERE id = %s FOR UPDATE",
+            (measurement_id,),
+        )
+        measurement = cursor.fetchone()
+        if (measurement is None or measurement["status"] != "predicting"
+                or measurement["prediction_claim_id"] != claim_id):
+            raise RuntimeError("Prediction claim is no longer active")
+        cursor.execute(
+            "SELECT id FROM predictions WHERE measurement_id = %s LIMIT 1",
+            (measurement_id,),
+        )
+        if cursor.fetchone() is not None:
+            raise RuntimeError("Prediction already exists")
         cursor.execute(
             "INSERT INTO predictions (measurement_id, predicted_wear_um, "
             "predicted_type, model_name, model_version, "
@@ -197,9 +235,11 @@ def persist_prediction(measurement_id: int, result: dict) -> dict:
                 (prediction_id, status, message),
             )
         cursor.execute(
-            "UPDATE measurements SET status = 'completed', error_message = NULL "
-            "WHERE id = %s AND status = 'predicting'",
-            (measurement_id,),
+            "UPDATE measurements SET status = 'completed', error_message = NULL, "
+            "prediction_claim_id = NULL, prediction_started_at = NULL "
+            "WHERE id = %s AND status = 'predicting' "
+            "AND prediction_claim_id = %s",
+            (measurement_id, claim_id),
         )
         if cursor.rowcount != 1:
             raise RuntimeError("Measurement state changed during prediction")
@@ -223,26 +263,98 @@ def persist_prediction(measurement_id: int, result: dict) -> dict:
     return _db_operation(operation)
 
 
-def mark_measurement_failed(measurement_id: int):
+def mark_measurement_failed(measurement_id: int, claim_id: str):
     def operation(cursor):
         cursor.execute(
             "UPDATE measurements SET status = 'failed', "
-            "error_message = 'Prediction processing failed' "
-            "WHERE id = %s AND status = 'predicting'",
-            (measurement_id,),
+            "error_message = 'Prediction processing failed', "
+            "prediction_claim_id = NULL, prediction_started_at = NULL "
+            "WHERE id = %s AND status = 'predicting' "
+            "AND prediction_claim_id = %s",
+            (measurement_id, claim_id),
         )
     _db_operation(operation)
 
 
+def _check_recovery_age(min_age_minutes: int):
+    if (type(min_age_minutes) is not int
+            or min_age_minutes < MIN_RECOVERY_AGE_MINUTES):
+        raise ValueError("Recovery minimum age must be at least 30 minutes")
+
+
+def inspect_prediction_claim(measurement_id: int, min_age_minutes: int = 30) -> dict:
+    """Read-only operator inspection. It NEVER changes a measurement."""
+    _check_recovery_age(min_age_minutes)
+
+    def operation(cursor):
+        cursor.execute(RECOVERY_SELECT, (min_age_minutes * 60, measurement_id))
+        row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(404, "Measurement not found")
+        return {
+            "measurement_id": measurement_id,
+            "status": row["status"],
+            "prediction_started_at": row["prediction_started_at"],
+            "has_claim_id": bool(row["prediction_claim_id"]),
+            "is_stale": bool(row["is_stale"]),
+            "note": "Stale age is NOT proof that a worker has stopped",
+        }
+
+    return _db_operation(operation)
+
+
+def recover_stale_prediction(measurement_id: int, min_age_minutes: int = 30) -> dict:
+    """Explicit operator action; fenced against late completion by an old claim.
+
+    Never call this automatically on service startup. Inspect first and
+    verify worker/job state before deliberately invoking this method.
+    """
+    _check_recovery_age(min_age_minutes)
+
+    def operation(cursor):
+        cursor.execute(
+            RECOVERY_SELECT + " FOR UPDATE",
+            (min_age_minutes * 60, measurement_id),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(404, "Measurement not found")
+        if row["status"] != "predicting":
+            raise HTTPException(409, "Measurement is not predicting")
+        if not row["prediction_claim_id"] or row["prediction_started_at"] is None:
+            raise HTTPException(409, "Legacy claim requires manual investigation")
+        if not row["is_stale"]:
+            raise HTTPException(409, "Prediction is not old enough to recover")
+        cursor.execute(
+            "SELECT id FROM predictions WHERE measurement_id = %s LIMIT 1",
+            (measurement_id,),
+        )
+        if cursor.fetchone() is not None:
+            raise HTTPException(409, "Existing prediction requires manual investigation")
+        cursor.execute(
+            "UPDATE measurements SET status = 'failed', "
+            "error_message = 'Interrupted prediction; operator recovery', "
+            "prediction_claim_id = NULL, prediction_started_at = NULL "
+            "WHERE id = %s AND status = 'predicting' "
+            "AND prediction_claim_id = %s",
+            (measurement_id, row["prediction_claim_id"]),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("Prediction claim changed during recovery")
+        return {"measurement_id": measurement_id, "status": "failed", "recovered": True}
+
+    return _db_operation(operation)
+
+
 def execute_prediction(measurement_id: int) -> dict:
-    image_key, sensor_key = claim_measurement(measurement_id)
+    image_key, sensor_key, claim_id = claim_measurement(measurement_id)
     try:
         result = request_serving_prediction(image_key, sensor_key)
-        return persist_prediction(measurement_id, result)
+        return persist_prediction(measurement_id, result, claim_id)
     except Exception:
         logger.exception("Prediction failed (measurement_id=%d)", measurement_id)
         try:
-            mark_measurement_failed(measurement_id)
+            mark_measurement_failed(measurement_id, claim_id)
         except Exception:
             logger.exception("Unable to mark failed (measurement_id=%d)", measurement_id)
         raise HTTPException(502, "Prediction failed") from None
