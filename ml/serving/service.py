@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import mlflow
+from mlflow.tracking import MlflowClient
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from PIL import Image
@@ -19,8 +20,8 @@ MODEL_ALIAS = os.getenv(
     "candidate",
 )
 
-WARNING_THRESHOLD = 50.0
-DANGER_THRESHOLD = 90.0
+WARNING_THRESHOLD = 150.0
+DANGER_THRESHOLD = 200.0
 
 # 고정 카메라 / 고정 촬영 위치 / 고정 해상도 환경에서 사용하는 ROI
 FIXED_CROP = (1150, 670, 1750, 1070)
@@ -29,6 +30,7 @@ FIXED_CROP = (1150, 670, 1750, 1070)
 CROPPED_SIZE = (600, 400)
 
 model = None
+model_version = None
 
 
 def determine_crop(
@@ -81,7 +83,7 @@ async def lifespan(app: FastAPI):
     서비스 시작 시 MLflow Registry에서 모델을 한 번만 로드하고,
     종료 시 참조를 해제합니다.
     """
-    global model
+    global model, model_version
 
     tracking_uri = os.environ["MLFLOW_TRACKING_URI"]
 
@@ -89,9 +91,11 @@ async def lifespan(app: FastAPI):
         tracking_uri
     )
 
-    model_uri = (
-        f"models:/{MODEL_NAME}@{MODEL_ALIAS}"
+    # Resolve alias once, then load the immutable Registry version.
+    model_version = str(
+        MlflowClient().get_model_version_by_alias(MODEL_NAME, MODEL_ALIAS).version
     )
+    model_uri = f"models:/{MODEL_NAME}/{model_version}"
 
     model = mlflow.pyfunc.load_model(
         model_uri
@@ -100,6 +104,7 @@ async def lifespan(app: FastAPI):
     yield
 
     model = None
+    model_version = None
 
 
 app = FastAPI(
@@ -117,6 +122,7 @@ def get_health():
         "status": "ok",
         "model_name": MODEL_NAME,
         "model_alias": MODEL_ALIAS,
+        "model_version": model_version,
         "model_loaded": model is not None,
     }
 
@@ -250,6 +256,7 @@ async def create_prediction(
                 "status": status,
                 "model_name": MODEL_NAME,
                 "model_alias": MODEL_ALIAS,
+                "model_version": model_version,
                 "model_epoch": int(
                     result["epoch"]
                 ),

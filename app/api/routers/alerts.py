@@ -43,7 +43,7 @@ def create_alert(payload: AlertCreate):
             SELECT p.predicted_wear_um, p.predicted_type, l.original_wear_um, l.original_type, s.set_number
             FROM predictions AS p
             JOIN measurements AS m ON m.id = p.measurement_id
-            JOIN tool_sets AS s ON s.set_id = m.set_id
+            LEFT JOIN tool_sets AS s ON s.set_id = m.set_id
             LEFT JOIN wear_labels AS l ON l.measurement_id = p.measurement_id
             WHERE p.id = %s
             """,
@@ -94,7 +94,7 @@ def list_alerts(
             FROM alerts AS a
             JOIN predictions AS p ON p.id = a.prediction_id
             JOIN measurements AS m ON m.id = p.measurement_id
-            JOIN tool_sets AS s ON s.set_id = m.set_id
+            LEFT JOIN tool_sets AS s ON s.set_id = m.set_id
             LEFT JOIN wear_labels AS l ON l.measurement_id = m.id
             ORDER BY a.created_at DESC, a.id DESC LIMIT %s OFFSET %s
             """,
