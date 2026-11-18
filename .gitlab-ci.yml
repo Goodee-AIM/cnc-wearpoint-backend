@@ -128,8 +128,9 @@ promote_serving_image:
     # Quay tag: v0.1.0
     - SERVING_VERSION="${CI_COMMIT_TAG#serving-}"
     - docker tag "$SERVING_IMAGE_REPO:$CI_COMMIT_SHA" "$SERVING_IMAGE_REPO:$SERVING_VERSION"
-
+    - docker tag "$SERVING_IMAGE_REPO:$CI_COMMIT_SHA" "$SERVING_IMAGE_REPO:latest"
     - docker push "$SERVING_IMAGE_REPO:$SERVING_VERSION"
+    - docker push "$SERVING_IMAGE_REPO:latest"
     - docker logout quay.io
 
   rules:
