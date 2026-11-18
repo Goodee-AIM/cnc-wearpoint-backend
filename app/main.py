@@ -10,6 +10,7 @@ from app.api.routers.sets import router as sets_router
 from app.api.routers.sensors import router as sensors_router
 
 from app.api.routers.measurements import router as measurements_router
+from app.api.routers.auto_prediction import router as auto_prediction_router
 from app.api.routers.predictions import (
     router as predictions_router,
     auth_router as prediction_auth_router,
@@ -62,5 +63,6 @@ app.include_router(monitoring_alerts_router)
 app.include_router(manual_inputs_router)
 
 app.include_router(measurements_router)
+app.include_router(auto_prediction_router)
 app.include_router(prediction_auth_router)
 app.include_router(predictions_router)
