@@ -11,6 +11,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from app.api.routers.images import list_images
 from app.core.database import get_connection
 from app.services.monitoring import build_schedule, elapsed_ms, state_response
+from app.services.monitoring_playback_gate import (
+    gate_enabled, initialize_gates, pause_gates, resume_gates,
+    read_gates, project_gated_state,
+)
 from app.services.monitoring_alerts import emit_due_alerts
 
 
@@ -19,7 +23,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/monitoring", tags=["공통 모니터링"])
 EMPTY_STATE = {
     "session_id": None, "status": "idle", "elapsed_ms": 0,
-    "resumed_at": None, "revision": 0,
+    "resumed_at": None, "revision": 0, "playback_generation": 0,
 }
 
 
@@ -87,12 +91,26 @@ def read_items(cursor):
     return cursor.fetchall()
 
 
+def _response(cursor, state, items, now):
+    base = state_response(state, items, now)
+    if not gate_enabled() or state.get('status') == 'idle':
+        return base
+    return project_gated_state(base, items, read_gates(cursor), now)
+
+
+def _emit_legacy_alerts(cursor, state, now):
+    # Legacy alerts rely on one global playback clock; the gated mode uses
+    # independent Set clocks and needs an occurrence-aware alert integration.
+    if not gate_enabled():
+        emit_due_alerts(cursor, state, now)
+
+
 @router.get("/state")
 def get_state():
     with monitoring_cursor() as cursor:
         state = read_state(cursor)
         items = read_items(cursor) if state["session_id"] else []
-        return state_response(state, items, read_clock(cursor))
+        return _response(cursor, state, items, read_clock(cursor))
 
 
 @router.post("/start", dependencies=[Depends(require_control_token)])
@@ -101,7 +119,7 @@ def start():
     with monitoring_cursor() as cursor:
         previous = read_state(cursor)
         if previous["status"] == "running":
-            return state_response(previous, read_items(cursor), read_clock(cursor))
+            return _response(cursor, previous, read_items(cursor), read_clock(cursor))
         measurements = []
         if previous["status"] == "idle":
             cursor.execute("""
@@ -123,7 +141,7 @@ def start():
     with monitoring_cursor() as cursor:
         state = read_state(cursor, exclusive=True)
         if state["status"] == "running":
-            return state_response(state, read_items(cursor), read_clock(cursor))
+            return _response(cursor, state, read_items(cursor), read_clock(cursor))
         if state["revision"] != previous["revision"]:
             raise HTTPException(409, "준비 중 공통 재생 상태가 변경됐습니다. 다시 조회하세요.")
         if state["status"] == "idle":
@@ -138,13 +156,18 @@ def start():
             """, schedule)
             state["session_id"] = state["session_id"] or str(uuid4())
         now = read_clock(cursor)
+        if gate_enabled():
+            if state['status'] == 'idle':
+                initialize_gates(cursor, state, read_items(cursor), now)
+            elif state['status'] == 'paused':
+                resume_gates(cursor, now)
         cursor.execute("""
             UPDATE monitoring_state SET session_id = %s, status = 'running',
                 resumed_at = %s, revision = revision + 1 WHERE id = 1
         """, (state["session_id"], now))
         state.update(status="running", resumed_at=now, revision=state["revision"] + 1)
-        emit_due_alerts(cursor, state, now)
-        return state_response(state, read_items(cursor), now)
+        _emit_legacy_alerts(cursor, state, now)
+        return _response(cursor, state, read_items(cursor), now)
 
 
 @router.post("/pause", dependencies=[Depends(require_control_token)])
@@ -154,7 +177,9 @@ def pause():
         now = read_clock(cursor)
         items = read_items(cursor)
         if state["status"] == "running":
-            emit_due_alerts(cursor, state, now)
+            if gate_enabled():
+                pause_gates(cursor, now)
+            _emit_legacy_alerts(cursor, state, now)
             elapsed = elapsed_ms(state, now)
             cursor.execute("""
                 UPDATE monitoring_state SET status = 'paused', elapsed_ms = %s,
@@ -162,7 +187,7 @@ def pause():
             """, (elapsed,))
             state.update(status="paused", elapsed_ms=elapsed, resumed_at=None,
                          revision=state["revision"] + 1)
-        return state_response(state, items, now)
+        return _response(cursor, state, items, now)
 
 
 @router.post("/reset", dependencies=[Depends(require_control_token)])
@@ -171,7 +196,7 @@ def reset():
         state = read_state(cursor, exclusive=True)
         now = read_clock(cursor)
         # 이전 세션의 마지막 발생은 보존하되 새 세션 집계에서는 제외합니다.
-        emit_due_alerts(cursor, state, now)
+        _emit_legacy_alerts(cursor, state, now)
         items = read_items(cursor)
         # 이미 만든 일정은 유지해 reset마다 대용량 CSV를 재검사하지 않습니다.
         state = {
@@ -180,13 +205,17 @@ def reset():
             "elapsed_ms": 0,
             "resumed_at": now if items else None,
             "revision": state["revision"] + 1,
+            "playback_generation": 0,
         }
         cursor.execute("""
             UPDATE monitoring_state SET session_id = %s, status = %s,
-                elapsed_ms = 0, resumed_at = %s, revision = revision + 1 WHERE id = 1
+                elapsed_ms = 0, resumed_at = %s, revision = revision + 1,
+                playback_generation = 0 WHERE id = 1
         """, (state["session_id"], state["status"], state["resumed_at"]))
+        if gate_enabled() and items:
+            initialize_gates(cursor, state, items, now)
         # 새 세션 알림은 commit 이후 worker가 기록합니다. 이 응답 시점의 새 집계는 0건입니다.
-        return state_response(state, items, now)
+        return _response(cursor, state, items, now)
 
 
 @router.post("/restart")
@@ -198,11 +227,15 @@ def restart():
         if not state["session_id"] or not items:
             raise HTTPException(409, "공통 재생 일정을 먼저 시작하세요.")
         now = read_clock(cursor)
-        emit_due_alerts(cursor, state, now)
+        _emit_legacy_alerts(cursor, state, now)
         cursor.execute("""
             UPDATE monitoring_state SET status = 'running', elapsed_ms = 0,
-                resumed_at = %s, revision = revision + 1 WHERE id = 1
+                resumed_at = %s, revision = revision + 1,
+                playback_generation = playback_generation + 1 WHERE id = 1
         """, (now,))
         state.update(status="running", elapsed_ms=0, resumed_at=now,
-                     revision=state["revision"] + 1)
-        return state_response(state, items, now)
+                     revision=state["revision"] + 1,
+                     playback_generation=state.get("playback_generation", 0) + 1)
+        if gate_enabled():
+            initialize_gates(cursor, state, items, now)
+        return _response(cursor, state, items, now)

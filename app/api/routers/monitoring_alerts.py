@@ -18,7 +18,9 @@ router = APIRouter(prefix="/api/monitoring/alerts", tags=["공통 알림 이력"
 FEED_SQL = """
     SELECT
         CONVERT(CONCAT('monitoring:', e.id) USING utf8mb4) COLLATE utf8mb4_0900_ai_ci AS id,
-        COALESCE(e.prediction_id, available.id) AS prediction_id,
+        CASE WHEN e.inference_run_id IS NOT NULL THEN NULL
+             ELSE COALESCE(e.prediction_id, available.id) END AS prediction_id,
+        e.inference_run_id,
         CONVERT(e.level USING utf8mb4) COLLATE utf8mb4_0900_ai_ci AS level,
         CONVERT(e.message USING utf8mb4) COLLATE utf8mb4_0900_ai_ci AS message,
         e.created_at, e.detail_confirmed_at, e.set_number,
@@ -34,7 +36,8 @@ FEED_SQL = """
     FROM monitoring_alert_events AS e
     LEFT JOIN predictions AS available ON available.id = (
         SELECT latest.id FROM predictions AS latest
-        WHERE e.prediction_id IS NULL AND latest.measurement_id = e.measurement_id
+        WHERE e.inference_run_id IS NULL AND e.prediction_id IS NULL
+              AND latest.measurement_id = e.measurement_id
         ORDER BY latest.predicted_at DESC, latest.id DESC LIMIT 1
     )
     WHERE e.id <= %s AND e.session_id = %s
@@ -42,6 +45,7 @@ FEED_SQL = """
     SELECT
         CONVERT(CONCAT('legacy:', a.id) USING utf8mb4) COLLATE utf8mb4_0900_ai_ci,
         a.prediction_id,
+        NULL AS inference_run_id,
         CONVERT(a.level USING utf8mb4) COLLATE utf8mb4_0900_ai_ci,
         CONVERT(a.message USING utf8mb4) COLLATE utf8mb4_0900_ai_ci,
         TIMESTAMPADD(MINUTE, %s, a.created_at),
@@ -143,7 +147,8 @@ def list_shared_alerts(
         cursor.execute(event_sql + " ORDER BY e.created_at DESC, e.id DESC", (*parameters, limit, offset))
         items = [utc_times(row) for row in cursor.fetchall()]
         for row in items:
-            row["can_acknowledge"] = row["prediction_id"] is not None
+            row["can_acknowledge"] = (row["prediction_id"] is not None
+                                      or row["inference_run_id"] is not None)
         return {
             **counts, "filtered_total": filtered_total,
             "event_max_id": event_max_id, "legacy_max_id": 0,
@@ -160,14 +165,15 @@ def acknowledge_shared_alert(record_id: str = Path()):
     # 테이블명은 위의 고정 허용 값으로만 선택합니다.
     table = "monitoring_alert_events" if kind == "monitoring" else "alerts"
     with monitoring_cursor() as cursor:
-        fields = "id, prediction_id, measurement_id" if kind == "monitoring" else "id, prediction_id"
+        fields = "id, prediction_id, inference_run_id, measurement_id" if kind == "monitoring" else "id, prediction_id"
         cursor.execute(
             f"SELECT {fields} FROM {table} WHERE id = %s FOR UPDATE", (int(number),),
         )
         record = cursor.fetchone()
         if record is None:
             raise HTTPException(404, "알림이 없습니다.")
-        if kind == "monitoring" and record["prediction_id"] is None:
+        if (kind == "monitoring" and record["prediction_id"] is None
+                and record["inference_run_id"] is None):
             cursor.execute("""
                 SELECT id, predicted_wear_um FROM predictions
                 WHERE measurement_id = %s ORDER BY predicted_at DESC, id DESC LIMIT 1
@@ -179,7 +185,8 @@ def acknowledge_shared_alert(record_id: str = Path()):
                     WHERE id = %s
                 """, (prediction["id"], prediction["predicted_wear_um"], int(number)))
                 record["prediction_id"] = prediction["id"]
-        if record["prediction_id"] is None:
+        if (record["prediction_id"] is None
+                and not (kind == "monitoring" and record["inference_run_id"] is not None)):
             raise HTTPException(422, "예측 결과가 있는 알림만 확인 시각을 저장할 수 있습니다.")
         now = read_clock(cursor)
         # 원래 alerts는 기존 API와 같은 DB 현지 시각으로 확인 시각을 기록합니다.

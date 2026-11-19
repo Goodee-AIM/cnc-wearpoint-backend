@@ -36,6 +36,15 @@ def get_connection():
         }
     )
 
+    # Isolated test tunnel only. TLS certificate verification is not enabled.
+    # With DB_SSL_MODE unset, existing production settings remain unchanged.
+    if os.getenv("DB_SSL_MODE") == "tls_test":
+        test_host = os.getenv("DB_HOST", "127.0.0.1")
+        test_port = int(os.getenv("DB_PORT", "3306"))
+        if test_host != "127.0.0.1" or test_port != 13306:
+            raise RuntimeError("tls_test is restricted to 127.0.0.1:13306")
+        ssl_options = {"ssl_disabled": False}
+
     return mysql.connector.connect(
         host=os.getenv(
             "DB_HOST",

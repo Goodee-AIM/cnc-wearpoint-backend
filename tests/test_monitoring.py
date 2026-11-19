@@ -92,7 +92,8 @@ def setup(tmp_path, monkeypatch):
         connection.executescript("""
             CREATE TABLE monitoring_state (
                 id INTEGER PRIMARY KEY, session_id TEXT, status TEXT DEFAULT 'idle',
-                elapsed_ms INTEGER DEFAULT 0, resumed_at TEXT, revision INTEGER DEFAULT 0
+                elapsed_ms INTEGER DEFAULT 0, resumed_at TEXT, revision INTEGER DEFAULT 0,
+                playback_generation INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE monitoring_items (
                 set_number INTEGER, position INTEGER, measurement_id INTEGER,
@@ -113,7 +114,7 @@ def setup(tmp_path, monkeypatch):
             );
             CREATE TABLE monitoring_alert_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, cycle_number INTEGER DEFAULT 1, set_number INTEGER,
-                position INTEGER, measurement_id INTEGER, prediction_id INTEGER,
+                position INTEGER, measurement_id INTEGER, prediction_id INTEGER, inference_run_id TEXT, playback_generation INTEGER NOT NULL DEFAULT 0,
                 image_name TEXT, sensor_name TEXT, source TEXT, level TEXT,
                 judged_wear_um REAL, predicted_wear_um REAL, original_type TEXT,
                 warning_threshold_um REAL, danger_threshold_um REAL,
@@ -387,3 +388,23 @@ def test_restart_browser_control_header_is_allowed(setup):
         })
         assert response.status_code == 200
         assert 'x-monitoring-control-token' in response.headers['access-control-allow-headers'].lower()
+
+
+def test_playback_generation_fences_restarts_and_resets(setup):
+    _, clock = setup
+    with TestClient(app) as client:
+        started = client.post("/api/monitoring/start", headers=TOKEN).json()
+        assert started["playback_generation"] == 0
+        first = client.post("/api/monitoring/restart").json()
+        assert first["session_id"] == started["session_id"]
+        assert first["playback_generation"] == 1
+        assert first["cycle_number"] == 1
+        second = client.post("/api/monitoring/restart").json()
+        assert second["playback_generation"] == 2
+        client.post("/api/monitoring/pause", headers=TOKEN)
+        resumed = client.post("/api/monitoring/start", headers=TOKEN).json()
+        assert resumed["playback_generation"] == 2
+        reset = client.post("/api/monitoring/reset", headers=TOKEN).json()
+        assert reset["session_id"] != started["session_id"]
+        assert reset["playback_generation"] == 0
+        assert client.get("/api/monitoring/state").json()["playback_generation"] == 0

@@ -10,7 +10,6 @@ import hashlib
 import hmac
 import os
 import time
-from threading import BoundedSemaphore
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
@@ -19,11 +18,12 @@ from starlette.responses import JSONResponse
 
 from app.api.routers.measurements import create_measurement
 from app.services.prediction_execution import execute_prediction
+from app.services.manual_replay_prediction import execute_manual_replay_prediction
+from app.services.inference_capacity import inference_slots as _inference_slots
 
 router = APIRouter(prefix="/api/measurements", tags=["auto-prediction"])
 
 # In-process cap, not a distributed rate limit. Also configure Nginx limits.
-_inference_slots = BoundedSemaphore(1)
 _RETRY_TTL_SECONDS = 3600
 
 
@@ -71,6 +71,46 @@ def _retry_capability(measurement_id: int) -> str:
     data = f"v1:{measurement_id}:{expires}"
     signature = hmac.new(_retry_signing_key(), data.encode(), hashlib.sha256).hexdigest()
     return f"{data}:{signature}"
+
+
+def _replay_cookie_name(measurement_id: int) -> str:
+    return f"__Host-cnc_wp_replay_{measurement_id}"
+
+
+def _replay_signing_key() -> bytes:
+    # Distinct purpose/key from the one-shot *failed-upload* retry capability.
+    return hmac.new(_retry_signing_key(), b"cnc-wp-replay-v1", hashlib.sha256).digest()
+
+
+def _allow_replay(response: JSONResponse, measurement_id: int) -> None:
+    expires = int(time.time()) + _RETRY_TTL_SECONDS
+    data = f"v1:{measurement_id}:{expires}"
+    signature = hmac.new(_replay_signing_key(), data.encode(), hashlib.sha256).hexdigest()
+    response.set_cookie(
+        key=_replay_cookie_name(measurement_id), value=f"{data}:{signature}",
+        max_age=_RETRY_TTL_SECONDS, path="/", secure=True, httponly=True,
+        samesite="strict",
+    )
+    response.headers["Cache-Control"] = "no-store"
+
+
+def _has_replay_capability(request: Request, measurement_id: int) -> bool:
+    value = request.cookies.get(_replay_cookie_name(measurement_id), "")
+    if len(value) > 256:
+        return False
+    try:
+        version, row_id, expiry, signature = value.split(":")
+        now = int(time.time())
+        if (version != "v1" or str(measurement_id) != row_id
+                or not expiry.isdecimal()
+                or not now < int(expiry) <= now + _RETRY_TTL_SECONDS
+                or len(signature) != 64):
+            return False
+        expected = hmac.new(_replay_signing_key(),
+                            f"{version}:{row_id}:{expiry}".encode(), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(signature, expected)
+    except (ValueError, TypeError):
+        return False
 
 
 def _has_retry_capability(request: Request, measurement_id: int) -> bool:
@@ -159,11 +199,53 @@ async def auto_predict(
             _allow_retry(response, measurement_id)
             return response
 
-        return {
+        response = JSONResponse(status_code=201, content={
             "measurement_id": measurement_id,
             "measurement_status": "completed",
             "prediction": prediction,
-        }
+        })
+        # A successful upload gets a short-lived, upload-scoped
+        # replay cookie; the one-shot failure retry cookie is separate.
+        _allow_replay(response, measurement_id)
+        return response
+    finally:
+        _inference_slots.release()
+
+
+@router.post("/{measurement_id}/replay-predict")
+async def replay_completed_upload(request: Request, measurement_id: int = Path(gt=0)):
+    """Fresh Serving call over the SAME stored image+sensor, one per replay click.
+
+    Uses a short-lived HttpOnly replay capability issued only AFTER a
+    successful upload; no public arbitrary-measurement access.
+    """
+    _authorize_auto_prediction(request)
+    if not _has_replay_capability(request, measurement_id):
+        raise HTTPException(403, "재생 권한이 없거나 만료됐습니다. 파일을 다시 업로드해 주세요.")
+    if not _inference_slots.acquire(blocking=False):
+        raise _busy()
+    try:
+        try:
+            prediction = await run_in_threadpool(execute_manual_replay_prediction, measurement_id)
+        except HTTPException as exc:
+            if exc.status_code != 502:
+                raise
+            response = JSONResponse(
+                status_code=502,
+                content=_error_body(
+                    "REPLAY_FAILED", "저장된 파일의 새 AI 추론에 실패했습니다.", measurement_id
+                ),
+            )
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        response = JSONResponse(status_code=200, content={
+            "measurement_id": measurement_id,
+            "measurement_status": "completed",
+            "prediction": prediction,
+        })
+        # Renew the bounded capability after a successful replay.
+        _allow_replay(response, measurement_id)
+        return response
     finally:
         _inference_slots.release()
 
@@ -212,6 +294,7 @@ async def retry_auto_prediction(
             },
         )
         response.delete_cookie(_cookie_name(measurement_id), path="/", secure=True, httponly=True, samesite="strict")
+        _allow_replay(response, measurement_id)
         response.headers["Cache-Control"] = "no-store"
         return response
     finally:

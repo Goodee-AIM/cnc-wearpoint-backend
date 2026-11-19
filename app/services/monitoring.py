@@ -127,6 +127,7 @@ def state_response(state, items, now):
         "server_time": now.replace(tzinfo=timezone.utc).isoformat(),
         "session_id": state["session_id"],
         "revision": state["revision"],
+        "playback_generation": state.get("playback_generation", 0),
         "status": status,
         "elapsed_ms": elapsed,
         "cycle_number": cycle,
