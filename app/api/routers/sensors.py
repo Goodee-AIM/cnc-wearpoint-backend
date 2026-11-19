@@ -105,3 +105,22 @@ def get_sensor(set_id: str, filename: str):
         media_type="text/csv",
         headers=headers,
     )
+
+@router.get("/{set_id}/{filename}/cutting-segment")
+def get_sensor_cutting_segment(set_id: str, filename: str):
+    """센서 원본의 절삭 구간 경계를 초 단위로 반환합니다."""
+    from app.services.cutting_segment_source import get_cutting_segment
+
+    normalized_set = validate_set(set_id)
+    if not SENSOR_NAME_PATTERN.fullmatch(filename):
+        raise HTTPException(status_code=400, detail="허용되지 않는 센서 파일명입니다.")
+    try:
+        return get_cutting_segment(f"sensors/{normalized_set}/{filename}")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="센서 CSV 파일을 찾을 수 없습니다.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        status = 404 if code in {"404", "NoSuchKey", "NotFound"} else 502
+        raise HTTPException(status_code=status, detail="센서 구간 조회에 실패했습니다.") from exc

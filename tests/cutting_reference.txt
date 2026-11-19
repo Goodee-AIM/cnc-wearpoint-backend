@@ -1,0 +1,98 @@
+def extract_cutting_segment(
+    df: pd.DataFrame,
+    fs: float,
+    window_ms: float = CUT_WINDOW_MS,
+    min_duration_ms: float = CUT_MIN_DURATION_MS,
+) -> tuple[pd.DataFrame, int, int]:
+    """
+    Extract the longest cutting segment using combined Fx/Fy moving RMS.
+
+    Hysteresis thresholds:
+        Entry: noise median + 10 * robust sigma
+        Exit : noise median +  6 * robust sigma
+    """
+    if len(df) == 0:
+        raise ValueError("센서 데이터가 비어 있습니다.")
+
+    fx = df["force_x"].to_numpy(dtype=np.float64)
+    fy = df["force_y"].to_numpy(dtype=np.float64)
+
+    if not np.isfinite(fx).all() or not np.isfinite(fy).all():
+        raise ValueError("Force X/Y에 NaN 또는 무한대 값이 포함되어 있습니다.")
+
+    # 1. Estimate baseline from the first 10% of the signal.
+    baseline_n = max(1, int(len(df) * 0.1))
+    base_x = np.median(fx[:baseline_n])
+    base_y = np.median(fy[:baseline_n])
+
+    fx = fx - base_x
+    fy = fy - base_y
+
+    # 2. Calculate channel-wise moving RMS and combine them.
+    window = max(1, int(round(fs * window_ms / 1000)))
+
+    rms_x = np.sqrt(
+        uniform_filter1d(fx ** 2, size=window, mode="reflect")
+    )
+    rms_y = np.sqrt(
+        uniform_filter1d(fy ** 2, size=window, mode="reflect")
+    )
+    energy = np.sqrt(rms_x ** 2 + rms_y ** 2)
+
+    # 3. Estimate noise level from the lowest 20% of energy values.
+    baseline_energy = energy[
+        energy <= np.percentile(energy, 20)
+    ]
+
+    noise_median = float(np.median(baseline_energy))
+    mad = float(
+        np.median(np.abs(baseline_energy - noise_median))
+    )
+    noise_std = 1.4826 * mad
+
+    low_threshold = noise_median + 6 * noise_std
+    high_threshold = noise_median + 10 * noise_std
+
+    # 4. Hysteresis thresholding.
+    active = False
+    mask = np.zeros(len(df), dtype=bool)
+
+    for i, value in enumerate(energy):
+        if not active and value > high_threshold:
+            active = True
+        elif active and value < low_threshold:
+            active = False
+
+        mask[i] = active
+
+    # 5. Find continuous active segments.
+    changes = np.diff(
+        np.r_[False, mask, False].astype(np.int8)
+    )
+    starts = np.where(changes == 1)[0]
+    ends = np.where(changes == -1)[0]
+
+    min_samples = max(
+        1,
+        int(round(fs * min_duration_ms / 1000)),
+    )
+
+    valid_segments = [
+        (int(start), int(end))
+        for start, end in zip(starts, ends)
+        if end - start >= min_samples
+    ]
+
+    if not valid_segments:
+        raise ValueError(
+            "최소 절삭구간 길이를 만족하는 구간을 찾지 못했습니다."
+        )
+
+    start_idx, end_idx = max(
+        valid_segments,
+        key=lambda segment: segment[1] - segment[0],
+    )
+
+    cutting_df = df.iloc[start_idx:end_idx].copy()
+
+    return cutting_df, start_idx, end_idx

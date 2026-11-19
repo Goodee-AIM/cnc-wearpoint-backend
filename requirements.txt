@@ -30,22 +30,37 @@ jmespath==1.1.0
     #   botocore
 mysql-connector-python==26.10.0
     # via cnc-wearpoint-backend
+numpy==2.3.5
+    # via
+    #   cnc-wearpoint-backend
+    #   pandas
+    #   scipy
 opentelemetry-api==1.45.2
     # via fastapi
+pandas==2.2.3
+    # via cnc-wearpoint-backend
 pydantic==2.14.2
     # via fastapi
 pydantic-core==2.50.2
     # via pydantic
 python-dateutil==2.9.0.post0
-    # via botocore
+    # via
+    #   botocore
+    #   pandas
 python-dotenv==1.2.4
     # via
     #   cnc-wearpoint-backend
     #   uvicorn
+python-multipart==0.0.34
+    # via cnc-wearpoint-backend
+pytz==2026.6
+    # via pandas
 pyyaml==6.0.3
     # via uvicorn
 s3transfer==0.19.3
     # via boto3
+scipy==1.17.0
+    # via cnc-wearpoint-backend
 six==1.17.0
     # via python-dateutil
 starlette==1.10.0
@@ -63,6 +78,8 @@ typing-inspection==0.4.4
     # via
     #   fastapi
     #   pydantic
+tzdata==2026.6
+    # via pandas
 urllib3==2.8.0
     # via botocore
 uvicorn==0.54.0
@@ -73,4 +90,3 @@ watchfiles==1.3.0
     # via uvicorn
 websockets==17.4
     # via uvicorn
-python-multipart>=0.0.34
