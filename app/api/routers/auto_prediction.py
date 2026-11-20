@@ -19,7 +19,7 @@ from starlette.responses import JSONResponse
 from app.api.routers.measurements import create_measurement
 from app.services.prediction_execution import execute_prediction
 from app.services.manual_replay_prediction import execute_manual_replay_prediction
-from app.services.inference_capacity import inference_slots as _inference_slots
+from app.services.inference_capacity import manual_inference_slots as _inference_slots
 
 router = APIRouter(prefix="/api/measurements", tags=["auto-prediction"])
 

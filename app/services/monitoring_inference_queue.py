@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from app.core.database import get_connection
 from app.services.monitoring import state_response
 from app.services.prediction_execution import request_serving_prediction, validate_model_result
-from app.services.inference_capacity import inference_slots
+from app.services.inference_capacity import monitoring_inference_slots as inference_slots
 from app.services.monitoring_playback_gate import (
     gate_enabled, read_gates, project_gated_state, advance_gates,
 )
