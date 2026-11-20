@@ -285,3 +285,54 @@ def test_read_endpoint_uses_fenced_results_only_when_enabled(monkeypatch):
     response = client.get('/api/monitoring/inference/current')
     assert response.status_code == 200
     assert response.json() == {'enabled': True, 'runs': []}
+
+
+def test_gates_keep_advancing_while_serving_call_is_in_flight(monkeypatch):
+    """A slow Serving call must not freeze every Set's playback gate."""
+    import asyncio
+    import threading
+
+    release = threading.Event()
+    gate_ticks = []
+
+    def slow_process_one():
+        release.wait(timeout=10)
+        return False
+
+    def gate_tx(fn):
+        gate_ticks.append(fn)
+
+    monkeypatch.setattr(q, 'process_one', slow_process_one)
+    monkeypatch.setattr(q, '_transaction', gate_tx)
+    monkeypatch.setattr(q, 'enqueue_current', lambda: None)
+
+    async def scenario():
+        stop = asyncio.Event()
+        worker = asyncio.create_task(q.run_inference_worker(stop))
+        await asyncio.sleep(2.5)  # Serving still blocked the whole time
+        ticks = len(gate_ticks)
+        stop.set()
+        release.set()
+        await asyncio.wait_for(worker, timeout=5)
+        return ticks
+
+    assert asyncio.run(scenario()) >= 2
+
+
+def test_gate_failure_does_not_skip_enqueue(monkeypatch):
+    import asyncio
+
+    enqueued = []
+    monkeypatch.setattr(q, '_transaction', Mock(side_effect=RuntimeError('alert insert failed')))
+    monkeypatch.setattr(q, 'enqueue_current', lambda: enqueued.append(1))
+    monkeypatch.setattr(q, 'process_one', lambda: False)
+
+    async def scenario():
+        stop = asyncio.Event()
+        worker = asyncio.create_task(q.run_inference_worker(stop))
+        await asyncio.sleep(0.2)
+        stop.set()
+        await asyncio.wait_for(worker, timeout=5)
+
+    asyncio.run(scenario())
+    assert enqueued

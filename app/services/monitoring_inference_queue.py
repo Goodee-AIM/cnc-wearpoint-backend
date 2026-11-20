@@ -11,7 +11,9 @@ from contextlib import contextmanager
 
 from app.core.database import get_connection
 from app.services.monitoring import state_response
-from app.services.prediction_execution import request_serving_prediction, validate_model_result
+from app.services.prediction_execution import (
+    ServingInputRejected, request_serving_prediction, validate_model_result,
+)
 from app.services.inference_capacity import monitoring_inference_slots as inference_slots
 from app.services.monitoring_playback_gate import (
     gate_enabled, read_gates, project_gated_state, advance_gates,
@@ -305,6 +307,10 @@ def process_one():
                 prediction = request_serving_prediction(image_key, sensor_key)
                 # _finish rechecks identity under the monitoring state lock.
                 _finish(row, 'completed', result=prediction)
+            except ServingInputRejected as exc:
+                # Same files would be rejected again; record it distinctly.
+                logger.warning('Replay input rejected (run_id=%s): %s', row['run_id'], exc.reason)
+                _finish(row, 'failed', error_code='INPUT_REJECTED')
             except Exception:
                 logger.exception('Replay inference failed (run_id=%s)', row['run_id'])
                 _finish(row, 'failed', error_code='INFERENCE_FAILED')
@@ -329,7 +335,7 @@ def current_runs():
             SELECT run_id, session_id, playback_generation, cycle_number,
                    set_number, position, measurement_id, status,
                    predicted_wear_um, predicted_type, wear_status,
-                   model_name, model_version
+                   model_name, model_version, error_code
             FROM monitoring_inference_runs WHERE session_id = %s
               AND playback_generation = %s AND cycle_number IN ({placeholders})
         ''', (state['session_id'], state['playback_generation'], *active_cycles))
@@ -348,21 +354,47 @@ def current_runs():
                 'wear_status': row['wear_status'] if row['status'] == 'completed' else None,
                 'model_name': row['model_name'] if row['status'] == 'completed' else None,
                 'model_version': row['model_version'] if row['status'] == 'completed' else None,
+                # Fixed internal codes only (e.g. INPUT_REJECTED, INFERENCE_FAILED).
+                'error_code': row.get('error_code') if row['status'] in ('failed', 'cancelled') else None,
             })
         return {'enabled': True, 'runs': runs}
     return _transaction(operation)
 
 
-async def run_inference_worker(stop):
-    """One opt-in worker per application process; no implicit DB or Serving writes."""
+async def _sleep_or_stop(stop, seconds):
+    try:
+        await asyncio.wait_for(stop.wait(), timeout=seconds)
+    except TimeoutError:
+        pass
+
+
+async def _gate_loop(stop):
+    # Gates and enqueueing must keep ticking while a Serving call (up to the
+    # Serving timeout) is in flight; otherwise every Set freezes at 100%
+    # playback until the unrelated call returns. Steps fail independently.
     while not stop.is_set():
         try:
             await asyncio.to_thread(_transaction, advance_gates)
+        except Exception:
+            logger.exception('Replay gate advance failure')
+        try:
             await asyncio.to_thread(enqueue_current)
-            await asyncio.to_thread(process_one)
+        except Exception:
+            logger.exception('Replay inference enqueue failure')
+        await _sleep_or_stop(stop, 1)
+
+
+async def _serving_loop(stop):
+    while not stop.is_set():
+        processed = False
+        try:
+            processed = await asyncio.to_thread(process_one)
         except Exception:
             logger.exception('Replay inference worker failure')
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=1)
-        except TimeoutError:
-            pass
+        # Drain a backlog promptly; poll gently when idle.
+        await _sleep_or_stop(stop, 0 if processed else 1)
+
+
+async def run_inference_worker(stop):
+    """One opt-in worker per application process; no implicit DB or Serving writes."""
+    await asyncio.gather(_gate_loop(stop), _serving_loop(stop))
