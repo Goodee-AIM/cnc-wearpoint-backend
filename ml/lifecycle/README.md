@@ -33,6 +33,22 @@ python ml/lifecycle/model_lifecycle.py rollback --alias production
 ## 반영 시점 (중요)
 Serving은 **기동할 때 한 번만** `MODEL_ALIAS`를 해석합니다. 승격이나 롤백 후에는 Serving 컨테이너를 재시작해야 실제로 반영되고, 재시작하는 동안 추론이 잠시 중단됩니다. 재시작한 뒤에는 `/health`의 `model_version`과 `model_run_id`로 확인합니다. 운영 Serving은 `/opt/cnc-wearpoint/serving/compose.yaml`(수동 운영)에서 관리합니다.
 
+## Test Set manifest 생성 (`build_manifest.py`)
+```bash
+M=../matwi-research/data/raw
+python ml/lifecycle/build_manifest.py --labels $M/labels.csv --sets $M/sets.csv \
+    --storage-root storage --set 4 9 11 16 \
+    --out ml/lifecycle/eval/test_sets_manifest.csv --check-sensors
+```
+- 경로 규칙: `labels.ImageFile`(`MATWI/SetN/images/X`)를 `storage/SetN/SetN/images/X`로 대응시킵니다. 센서도 `sensordata`로 같은 방식입니다.
+- Set별 crop은 `sets.csv`의 학습용 crop을 사용합니다. Serving의 고정 ROI와 다른 Set이 있기 때문입니다(Set16).
+- 정답이나 파일이 없는 행은 제외하고 `*_excluded.csv`에 사유를 남깁니다. 값을 만들어 채우지 않습니다.
+- `--check-sensors`는 Serving의 `read_and_cut_sensor`로 직접 검사합니다(나노초 timestamp, 절삭 구간 검출 포함).
+- 출력 위치는 `--storage-root` 밖이어야 합니다. 데이터셋은 읽기만 합니다.
+
+## 유형 정확도 (`--type-map`)
+모델은 `flank_wear`/`other_wear` 두 가지만 예측합니다. 라벨의 `adhesion`, `flank_wear+adhesion`을 모델 클래스에 어떻게 대응시킬지 `--type-map`으로 지정해야 유형 정확도가 계산됩니다. 지정하지 않으면 `n/a`로 기록합니다. 대응 규칙은 모델팀이 학습할 때 쓴 기준을 따라야 합니다.
+
 ## Manifest 형식
 ```csv
 image_path,sensor_path,wear_um,type

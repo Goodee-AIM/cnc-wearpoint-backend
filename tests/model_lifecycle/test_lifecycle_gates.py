@@ -123,8 +123,28 @@ def test_compute_metrics():
     m = lc.compute_metrics(labels, preds)
     assert m["mae_um"] == pytest.approx(8.0)
     assert m["rmse_um"] == pytest.approx(((100 + 36) / 2) ** 0.5)
-    assert m["type_accuracy"] == pytest.approx(0.5)
+    # "adhesion" is not a model class: accuracy must not be silently computed.
+    assert m["type_accuracy"] is None
+    assert m["unmapped_types"] == ["adhesion"]
     assert m["n"] == 2
+
+    mapped = lc.compute_metrics(labels, preds, {"adhesion": "other_wear"})
+    assert mapped["type_accuracy"] == pytest.approx(1.0)
+    assert mapped["unmapped_types"] == []
+
+
+def test_parse_type_map_rejects_unknown_target():
+    assert lc.parse_type_map("adhesion=other_wear, flank_wear+adhesion=flank_wear") == {
+        "adhesion": "other_wear", "flank_wear+adhesion": "flank_wear"}
+    with pytest.raises(lc.LifecycleError, match="invalid --type-map"):
+        lc.parse_type_map("adhesion=sticky")
+
+
+def test_read_manifest_keeps_per_set_crop(tmp_path):
+    (tmp_path / "m.csv").write_text(
+        "image_path,sensor_path,wear_um,type,crop_left,crop_top,crop_right,crop_bottom\n"
+        "a.jpg,a.csv,90,flank_wear,1790,2045,2390,2445\n", encoding="utf-8")
+    assert lc.read_manifest(tmp_path / "m.csv")[0]["crop"] == (1790, 2045, 2390, 2445)
 
 
 def test_read_manifest_resolves_relative_paths(tmp_path):

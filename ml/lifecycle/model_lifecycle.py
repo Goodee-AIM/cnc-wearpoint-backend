@@ -12,7 +12,15 @@ Serving resolves MODEL_ALIAS once at startup, so a promote/rollback takes
 effect only after the Serving container is restarted (printed as a reminder).
 
 Manifest CSV header: image_path,sensor_path,wear_um,type
-Relative paths are resolved against the manifest's directory.
+[,crop_left,crop_top,crop_right,crop_bottom]  (see build_manifest.py)
+Relative paths are resolved against the manifest's directory. When crop
+columns are present they are used as-is (training crop per set); otherwise
+Serving's own ROI rule is applied.
+
+The model predicts only MODEL_TYPES. Label types outside that set (e.g.
+"adhesion", "flank_wear+adhesion") need an explicit --type-map such as
+"adhesion=other_wear,flank_wear+adhesion=other_wear"; without it type
+accuracy is not computed (reported as unavailable) instead of being wrong.
 """
 import argparse
 import csv
@@ -33,6 +41,10 @@ TAG_TYPE_ACC = "eval.type_accuracy"
 TAG_N = "eval.n"
 TAG_DATASET = "eval.dataset_sha256"
 TAG_RUN = "eval.run_id"
+TAG_TYPE_MAP = "eval.type_map"
+
+MODEL_TYPES = {"flank_wear", "other_wear"}
+CROP_COLUMNS = ("crop_left", "crop_top", "crop_right", "crop_bottom")
 
 
 class LifecycleError(Exception):
@@ -58,12 +70,15 @@ def read_manifest(path: Path) -> list[dict]:
             wear = float(row["wear_um"])
             if not math.isfinite(wear) or wear < 0:
                 raise LifecycleError(f"manifest line {line}: invalid wear_um")
-            rows.append({
+            item = {
                 "image_path": str((base / row["image_path"]).resolve()),
                 "sensor_path": str((base / row["sensor_path"]).resolve()),
                 "wear_um": wear,
                 "type": row["type"].strip(),
-            })
+            }
+            if all((row.get(c) or "").strip() for c in CROP_COLUMNS):
+                item["crop"] = tuple(int(row[c]) for c in CROP_COLUMNS)
+            rows.append(item)
     if not rows:
         raise LifecycleError("manifest has no rows")
     return rows
@@ -73,25 +88,42 @@ def manifest_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def compute_metrics(labels: list[dict], predictions: list[dict]) -> dict:
-    """MAE / RMSE in µm and wear-type accuracy over paired rows."""
+def parse_type_map(text: str | None) -> dict:
+    mapping = {}
+    for part in filter(None, (p.strip() for p in (text or "").split(","))):
+        label, sep, target = part.partition("=")
+        if not sep or target.strip() not in MODEL_TYPES:
+            raise LifecycleError(f"invalid --type-map entry '{part}' (target must be one of {sorted(MODEL_TYPES)})")
+        mapping[label.strip()] = target.strip()
+    return mapping
+
+
+def compute_metrics(labels: list[dict], predictions: list[dict], type_map: dict | None = None) -> dict:
+    """MAE / RMSE in µm and wear-type accuracy over paired rows.
+
+    type_accuracy is None when a label type cannot be expressed as a model class.
+    """
     if len(labels) != len(predictions) or not labels:
         raise LifecycleError("labels and predictions must be non-empty and the same length")
     errors = [float(p["predicted_wear_um"]) - l["wear_um"] for l, p in zip(labels, predictions)]
     if not all(math.isfinite(e) for e in errors):
         raise LifecycleError("model returned a non-finite predicted_wear_um")
     n = len(errors)
+    type_map = type_map or {}
+    expected = [type_map.get(l["type"], l["type"]) for l in labels]
+    unmapped = sorted({t for t in expected if t not in MODEL_TYPES})
     return {
         "mae_um": sum(abs(e) for e in errors) / n,
         "rmse_um": math.sqrt(sum(e * e for e in errors) / n),
-        "type_accuracy": sum(
-            str(p["predicted_type"]) == l["type"] for l, p in zip(labels, predictions)
-        ) / n,
+        "type_accuracy": None if unmapped else sum(
+            str(p["predicted_type"]) == t for t, p in zip(expected, predictions)) / n,
+        "unmapped_types": unmapped,
         "n": n,
     }
 
 
-def evaluate(client, mlflow, name: str, version: str, manifest: Path) -> dict:
+def evaluate(client, mlflow, name: str, version: str, manifest: Path,
+             type_map: dict | None = None) -> dict:
     sys.path.insert(0, str(SERVING_DIR))
     import pandas as pd
     from service import determine_crop  # same ROI rule as live Serving
@@ -99,25 +131,30 @@ def evaluate(client, mlflow, name: str, version: str, manifest: Path) -> dict:
     labels = read_manifest(manifest)
     model_input = pd.DataFrame([
         dict(image_path=r["image_path"], sensor_path=r["sensor_path"],
-             **dict(zip(("crop_left", "crop_top", "crop_right", "crop_bottom"),
-                        determine_crop(Path(r["image_path"])))))
+             **dict(zip(CROP_COLUMNS, r.get("crop") or determine_crop(Path(r["image_path"])))))
         for r in labels
     ])
     model = mlflow.pyfunc.load_model(f"models:/{name}/{version}")
     predictions = model.predict(model_input).to_dict(orient="records")
-    metrics = compute_metrics(labels, predictions)
+    metrics = compute_metrics(labels, predictions, type_map)
     dataset = manifest_sha256(manifest)
+    map_text = ",".join(f"{k}={v}" for k, v in sorted((type_map or {}).items())) or "none"
 
     with mlflow.start_run(run_name=f"evaluate-{name}-v{version}") as run:
         mlflow.set_tags({"lifecycle_step": "evaluate", "model_name": name,
                          "model_version": str(version), "dataset_sha256": dataset})
-        mlflow.log_metrics({k: float(v) for k, v in metrics.items()})
+        mlflow.set_tag("type_map", map_text)
+        mlflow.log_metrics({k: float(metrics[k]) for k in ("mae_um", "rmse_um", "n")})
+        if metrics["type_accuracy"] is not None:
+            mlflow.log_metric("type_accuracy", metrics["type_accuracy"])
         mlflow.log_artifact(str(manifest), artifact_path="eval")
         run_id = run.info.run_id
 
     for key, value in ((TAG_MAE, f"{metrics['mae_um']:.5f}"),
                        (TAG_RMSE, f"{metrics['rmse_um']:.5f}"),
-                       (TAG_TYPE_ACC, f"{metrics['type_accuracy']:.5f}"),
+                       (TAG_TYPE_ACC, "n/a" if metrics["type_accuracy"] is None
+                        else f"{metrics['type_accuracy']:.5f}"),
+                       (TAG_TYPE_MAP, map_text),
                        (TAG_N, str(metrics["n"])),
                        (TAG_DATASET, dataset),
                        (TAG_RUN, run_id)):
@@ -205,6 +242,7 @@ def main(argv=None):
     p = sub.add_parser("evaluate")
     p.add_argument("--version", required=True)
     p.add_argument("--manifest", required=True, type=Path)
+    p.add_argument("--type-map", help='e.g. "adhesion=other_wear,flank_wear+adhesion=other_wear"')
     p = sub.add_parser("promote")
     p.add_argument("--version", required=True)
     p.add_argument("--alias", required=True)
@@ -241,9 +279,15 @@ def main(argv=None):
                       f"type_acc={tags.get(TAG_TYPE_ACC, '-')} n={tags.get(TAG_N, '-')} "
                       f"dataset={tags.get(TAG_DATASET, '-')[:12]}")
         elif args.command == "evaluate":
-            result = evaluate(client, mlflow, name, args.version, args.manifest)
+            result = evaluate(client, mlflow, name, args.version, args.manifest,
+                              parse_type_map(args.type_map))
+            acc = result["type_accuracy"]
             print(f"v{args.version}: MAE={result['mae_um']:.3f} µm RMSE={result['rmse_um']:.3f} µm "
-                  f"type_acc={result['type_accuracy']:.3f} n={result['n']} run_id={result['run_id']}")
+                  f"type_acc={'n/a' if acc is None else f'{acc:.3f}'} n={result['n']} "
+                  f"run_id={result['run_id']}")
+            if result["unmapped_types"]:
+                print(f"type accuracy unavailable: label types {result['unmapped_types']} "
+                      f"need --type-map to a model class {sorted(MODEL_TYPES)}")
         elif args.command == "promote":
             plan = plan_promotion(client, name, args.version, args.alias, args.max_mae, args.force)
             if plan["action"] == "noop":
