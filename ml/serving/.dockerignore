@@ -1,0 +1,6 @@
+# Never bake local credentials or caches into the Serving image.
+.env*
+*.local
+__pycache__/
+*.pyc
+.pytest_cache/

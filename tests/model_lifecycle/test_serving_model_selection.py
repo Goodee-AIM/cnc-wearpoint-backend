@@ -41,7 +41,8 @@ class Registry:
         self.lookups.append((name, alias))
         if alias not in self.aliases:
             raise RuntimeError(f"RESOURCE_DOES_NOT_EXIST: {name}@{alias}")
-        return types.SimpleNamespace(name=name, version=self.aliases[alias])
+        version = self.aliases[alias]
+        return types.SimpleNamespace(name=name, version=version, run_id=f"run-v{version}")
 
 
 def fake_pyfunc_model(epoch=10):
@@ -137,6 +138,7 @@ def test_alias_is_resolved_to_version_and_fixed_version_uri_is_loaded(serving):
         "model_name": "cnc-wearpoint-multitask",
         "model_alias": "candidate",
         "model_version": "1",
+        "model_run_id": "run-v1",
         "model_loaded": True,
     }
 

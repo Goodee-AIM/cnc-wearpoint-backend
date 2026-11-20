@@ -19,7 +19,6 @@ from mlflow_model import CncWearPointModel
 
 DEFAULT_MODEL_NAME = "cnc-wearpoint-multitask"
 DEFAULT_EXPERIMENT_NAME = "CNC-wear-predict-type-classification"
-DEFAULT_ALIAS = "candidate"
 
 
 def main():
@@ -31,12 +30,10 @@ def main():
         help="Path to epoch_010.pth",
     )
 
+    # No production default: the target Registry must be chosen explicitly.
     parser.add_argument(
         "--tracking-uri",
-        default=os.getenv(
-            "MLFLOW_TRACKING_URI",
-            "https://aimw.duckdns.org/mlflow/",
-        ),
+        default=os.getenv("MLFLOW_TRACKING_URI"),
     )
 
     parser.add_argument(
@@ -49,9 +46,18 @@ def main():
         default=DEFAULT_MODEL_NAME,
     )
 
+    # Registering does NOT move any alias unless --alias is given.
+    # Promotion of a serving alias belongs to ml/lifecycle/model_lifecycle.py.
     parser.add_argument(
         "--alias",
-        default=DEFAULT_ALIAS,
+        default=None,
+        help="Optionally point this alias at the new version.",
+    )
+
+    parser.add_argument(
+        "--force-alias",
+        action="store_true",
+        help="Allow moving an alias that already points to another version.",
     )
 
     parser.add_argument(
@@ -61,6 +67,9 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if not args.tracking_uri:
+        parser.error("set --tracking-uri or MLFLOW_TRACKING_URI explicitly")
 
     checkpoint_path = Path(args.checkpoint).resolve()
 
@@ -161,18 +170,32 @@ def main():
 
         client = MlflowClient()
 
-        client.set_registered_model_alias(
-            args.model_name,
-            args.alias,
-            str(version),
-        )
+        if args.alias:
+            try:
+                existing = str(
+                    client.get_model_version_by_alias(args.model_name, args.alias).version
+                )
+            except Exception:
+                existing = None
+
+            if existing not in (None, str(version)) and not args.force_alias:
+                print(
+                    f"alias '{args.alias}' already points to v{existing}; "
+                    f"left unchanged (use --force-alias or model_lifecycle.py promote)"
+                )
+            else:
+                client.set_registered_model_alias(
+                    args.model_name,
+                    args.alias,
+                    str(version),
+                )
+                print(f"alias={args.alias} -> v{version}")
 
         print("MLflow registration complete")
         print(f"run_id={run.info.run_id}")
         print(f"model_name={args.model_name}")
         print(f"version={version}")
-        print(f"alias={args.alias}")
-        print(f"model_uri=models:/{args.model_name}@{args.alias}")
+        print(f"model_uri=models:/{args.model_name}/{version}")
 
 
 if __name__ == "__main__":
