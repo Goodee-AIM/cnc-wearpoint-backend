@@ -42,7 +42,7 @@ def test_worker_generates_all_sets_without_browser_and_does_not_duplicate(popula
     path, clock = populated
     started = monitoring.start()
     assert len(rows(path)) == 2
-    clock[0] += timedelta(seconds=25)
+    clock[0] += timedelta(seconds=12.5)
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(lambda _: monitoring_alerts.process_due_alerts(), range(2)))
     events = rows(path)
@@ -53,7 +53,7 @@ def test_worker_generates_all_sets_without_browser_and_does_not_duplicate(popula
     assert label_only["prediction_id"] is None
     assert label_only["judged_wear_um"] == 150
     caught_up = next(row for row in events if row["measurement_id"] == 2)
-    assert datetime.fromisoformat(caught_up["created_at"]) == clock[0] - timedelta(seconds=15)
+    assert datetime.fromisoformat(caught_up["created_at"]) == clock[0] - timedelta(seconds=7.5)
     assert datetime.fromisoformat(caught_up["recorded_at"]) == clock[0]
     assert caught_up["level"] == "danger"  # label 200, prediction 20
 
@@ -235,7 +235,7 @@ def test_cycles_keep_occurrences_and_confirmations_separate(populated):
                      if row['source'] == 'prediction')
         assert first['cycle_number'] == 1
         assert client.patch(f"/api/monitoring/alerts/{first['id']}/acknowledge").status_code == 200
-        clock[0] += timedelta(seconds=30)
+        clock[0] += timedelta(seconds=15)
         state = client.get('/api/monitoring/state').json()
         assert state['session_id'] == started['session_id']
         assert state['cycle_number'] == 2
@@ -252,14 +252,14 @@ def test_cycles_keep_occurrences_and_confirmations_separate(populated):
         assert older['measurement_id'] == newer['measurement_id']
         assert older['detail_confirmed_at'] is not None
         assert newer['detail_confirmed_at'] is None
-        assert datetime.fromisoformat(newer['created_at']) - datetime.fromisoformat(older['created_at']) == timedelta(seconds=30)
+        assert datetime.fromisoformat(newer['created_at']) - datetime.fromisoformat(older['created_at']) == timedelta(seconds=15)
     assert len(rows(path)) == 5
 
 
 def test_worker_catches_up_cycles_and_pause_keeps_absolute_clock(populated):
     path, clock = populated
     started = monitoring.start()
-    clock[0] += timedelta(seconds=71)
+    clock[0] += timedelta(seconds=35.5)
     monitoring_alerts.process_due_alerts()
     assert len(rows(path)) == 9
     assert {row['cycle_number'] for row in rows(path)} == {1, 2, 3}
@@ -273,7 +273,7 @@ def test_worker_catches_up_cycles_and_pause_keeps_absolute_clock(populated):
     resumed = monitoring.start()
     assert resumed['session_id'] == started['session_id']
     assert resumed['cycle_number'] == 3
-    clock[0] += timedelta(seconds=19)
+    clock[0] += timedelta(seconds=9.5)
     monitoring_alerts.process_due_alerts()
     assert monitoring.get_state()['cycle_number'] == 4
     assert len(rows(path)) == 11
@@ -293,7 +293,7 @@ def test_reset_restarts_cycle_and_counts_without_deleting_history_or_scanning_cs
         feed = client.get("/api/monitoring/alerts").json()
         event = next(row for row in feed["items"] if row["prediction_id"] is not None)
         assert client.patch(f"/api/monitoring/alerts/{event['id']}/acknowledge").status_code == 200
-        clock[0] += timedelta(seconds=61)
+        clock[0] += timedelta(seconds=30.5)
         monitoring_alerts.process_due_alerts()
         before = rows(path)
         assert {row["cycle_number"] for row in before} == {1, 2, 3}

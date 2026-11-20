@@ -6,6 +6,7 @@ from datetime import timedelta
 from app.core.database import get_connection
 from app.core.wear_policy import WARNING_UM, DANGER_UM, wear_level, alert_title
 from app.services.monitoring import elapsed_ms
+from app.services.playback_speed import PLAYBACK_RATE
 
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,8 @@ def emit_due_alerts(cursor, state, now):
             # 재개 이전에 새로 추가된 결과는 현재 감지 시각으로 기록합니다.
             occurred_at = now
             if occurrence_ms >= state["elapsed_ms"]:
-                occurred_at -= timedelta(milliseconds=elapsed - occurrence_ms)
+                # Replay milliseconds advance faster than UTC wall time.
+                occurred_at -= timedelta(milliseconds=(elapsed - occurrence_ms) / PLAYBACK_RATE)
             cursor.execute("""
                 INSERT INTO monitoring_alert_events
                     (session_id, cycle_number, set_number, position, measurement_id, prediction_id,

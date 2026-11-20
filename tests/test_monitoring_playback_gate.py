@@ -24,7 +24,7 @@ def item(**changes):
 
 
 def test_elapsed_does_not_increase_when_paused():
-    assert gate.elapsed_ms(row(phase_elapsed_ms=100), NOW) == 5100
+    assert gate.elapsed_ms(row(phase_elapsed_ms=100), NOW) == 10100
     assert gate.elapsed_ms(row(phase_elapsed_ms=100), NOW, False) == 100
     assert gate.elapsed_ms(row(phase_elapsed_ms=100, phase_started_at=None), NOW) == 100
 

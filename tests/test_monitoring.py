@@ -161,9 +161,10 @@ def test_late_join_pause_resume_reset_and_restart(setup):
         assert len(idle["sets"]) == 8
         first = client.post("/api/monitoring/start", headers=TOKEN).json()
         assert first["status"] == "running"
+        assert first["playback_rate"] == 2
         assert first["sets"][0]["image_name"] == "one.png"
         assert first["sets"][0]["measurement_id"] == 1
-        clock[0] += timedelta(seconds=11)
+        clock[0] += timedelta(seconds=5.5)
         second = client.get("/api/monitoring/state").json()
         assert second["sets"][0]["measurement_id"] == 2
         assert second["sets"][0]["elapsed_ms"] == 1000
@@ -176,12 +177,12 @@ def test_late_join_pause_resume_reset_and_restart(setup):
         assert resumed["elapsed_ms"] == paused["elapsed_ms"]
     # 다른 클라이언트와 새 DB 연결에서도 같은 저장 상태를 반환합니다.
     with TestClient(app) as client:
-        clock[0] += timedelta(seconds=2)
+        clock[0] += timedelta(seconds=1)
         third = client.get("/api/monitoring/state").json()
         assert third["session_id"] == first["session_id"]
         assert third["sets"][0]["status"] == "completed"
         assert third["sets"][-1]["elapsed_ms"] == 13000
-        clock[0] += timedelta(minutes=1)
+        clock[0] += timedelta(seconds=30)
         done = client.get("/api/monitoring/state").json()
         assert done["status"] == "running"
         assert done["elapsed_ms"] == 73000
@@ -318,7 +319,7 @@ def test_restart_keeps_session_and_acknowledged_history(setup):
         with sqlite3.connect(path) as connection:
             connection.execute("UPDATE monitoring_alert_events SET detail_confirmed_at='2026-11-11 01:30:01'")
             before = connection.execute('SELECT * FROM monitoring_alert_events').fetchall()
-        clock[0] += timedelta(seconds=5)
+        clock[0] += timedelta(seconds=2.5)
         response = client.post('/api/monitoring/restart', headers=TOKEN)
         assert response.status_code == 200
         state = response.json()
@@ -340,7 +341,7 @@ def test_restart_records_due_alerts_and_resumes_paused_playback(setup):
         connection.execute("INSERT INTO wear_labels VALUES (2,150,'flank_wear')")
     with TestClient(app) as client:
         initial = client.post('/api/monitoring/start', headers=TOKEN).json()
-        clock[0] += timedelta(seconds=11)
+        clock[0] += timedelta(seconds=5.5)
         assert client.post('/api/monitoring/restart', headers=TOKEN).status_code == 200
         with sqlite3.connect(path) as connection:
             assert connection.execute('SELECT COUNT(*) FROM monitoring_alert_events').fetchone()[0] == 2
@@ -350,7 +351,7 @@ def test_restart_records_due_alerts_and_resumes_paused_playback(setup):
         assert state['status'] == 'running'
         assert state['elapsed_ms'] == 0
         assert state['session_id'] == initial['session_id']
-        clock[0] += timedelta(seconds=2)
+        clock[0] += timedelta(seconds=1)
         assert client.get('/api/monitoring/state').json()['elapsed_ms'] == 2000
 
 
