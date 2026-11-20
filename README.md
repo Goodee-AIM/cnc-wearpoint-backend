@@ -56,7 +56,7 @@ Frontend
   CNC WearPoint 서비스 DB와 MLflow Tracking / Auth DB의 구조, 검증 및 RDS 이전 현황
 
 - [로컬 배포 및 인프라 파일 구성 안내](docs/deployment/infrastructure.md)  
-  Docker Compose 실행 방법과 배포 관련 파일 구조 (문서 안의 Kubernetes 확장 계획 서술은 현재 운영 구성과 다르며, 운영은 Docker VM 기반입니다)
+  Docker Compose 실행 방법, 배포 관련 파일 구조, 운영 VM 배포 구성(Backend CI 배포, Serving 수동 운영)
 
 - [자동 예측 API 안내](docs/deployment/auto_prediction.md)  
   업로드 + 추론 통합 API(`/api/measurements/auto-predict`)와 재추론 Cookie 동작

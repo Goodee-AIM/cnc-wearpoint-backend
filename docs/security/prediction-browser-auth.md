@@ -1,13 +1,20 @@
 # Browser prediction authentication (Backend only)
 
-This patch adds **no React UI**. The existing model Serving and RDS prediction
-logic is unchanged; the browser-facing request no longer needs the private
-`X-Prediction-Token` header.
+This feature has **no React UI**: the current frontend does not call the
+operator login or `/predict`. The frontend Set test screen instead uses the
+login-free `POST /api/measurements/auto-predict` with upload-scoped HttpOnly
+retry/replay cookies (see `docs/deployment/auto_prediction.md`). The operator
+session remains available for an operator browser calling
+`POST /api/measurements/{measurement_id}/predict` without the private
+`X-Prediction-Token` header. Code: `app/core/prediction_session.py`,
+`app/api/routers/predictions.py`, `app/services/prediction_execution.py`.
 
 ## Deployment prerequisites
 
-- Keep `PREDICTION_API_ENABLED=0` until the new Backend image has passed local
-  and integration tests, schema verification, and an approved deployment.
+- `PREDICTION_API_ENABLED` defaults to `0`; while it is `0`, login, session,
+  logout, `/predict` (and also `auto-predict`) return 503. Enable it only after
+  the Backend image has passed local and integration tests, schema
+  verification, and an approved deployment.
 - Require HTTPS at the public Nginx ingress. The Backend cookie has
   `HttpOnly`, `Secure`, `SameSite=Strict`, and the `__Host-` name prefix.
 - Set `PREDICTION_BROWSER_ORIGIN=https://aimw.duckdns.org` to the actual public
@@ -39,9 +46,11 @@ logic is unchanged; the browser-facing request no longer needs the private
   appropriate before exposing this to untrusted users: this patch protects
   *prediction operations*, not every pre-existing API or data resource.
 
-## Frontend team API contract (no styling work here)
+## Operator browser API contract (not used by the current frontend)
 
 All requests below use same-origin HTTPS with `credentials: "include"`.
+Login, logout and an authenticated `/predict` require the `Origin` and `Host`
+headers to match `PREDICTION_BROWSER_ORIGIN`.
 
 1. `POST /api/prediction-auth/login` JSON:
    `{"username":"operator","password":"<operator password>"}`.
@@ -49,27 +58,42 @@ All requests below use same-origin HTTPS with `credentials: "include"`.
    The browser receives a secure **HttpOnly cookie**, not the internal token.
 2. `GET /api/prediction-auth/session` returns `{ "authenticated": true|false }`.
 3. `POST /api/measurements` multipart upload with `image` and `sensor_csv`.
-   Returns `measurement_id`; existing API and storage behaviour are unchanged.
+   Returns `measurement_id` (status `ready`). The upload is validated against
+   the Serving input rules (PNG/JPEG decoded with Pillow, 600x400 or at least
+   1750x1070; 6-column CSV with strictly increasing, constant-interval
+   timestamps and at least 512 rows) and rejected with 413/422 otherwise.
 4. `POST /api/measurements/{measurement_id}/predict` **without**
-   `X-Prediction-Token`, with the operator cookie. The Backend reads existing
-   Object Storage objects and invokes Serving. For a `failed` measurement,
-   the same URL retries without another upload.
+   `X-Prediction-Token`, with the operator cookie. The Backend claims the row
+   (`predicting`), reads existing Object Storage objects and invokes Serving
+   (180 s timeout), then stores the prediction (and an `alerts` row for
+   warning/danger, Warning 150 µm / Danger 200 µm recomputed by the Backend).
+   For a `failed` measurement without a stored prediction, the same URL
+   retries without another upload.
 5. `GET /api/measurements/{measurement_id}` to read the persisted status.
 6. `POST /api/prediction-auth/logout` clears the browser cookie.
 
 ## Error handling and retry safety
 
-- `401`: not logged in or session expired; login is required.
+- `401`: not logged in, session expired, or invalid `X-Prediction-Token`;
+  login is required.
 - `403`: origin/host mismatch; do not retry automatically.
+- `404`: measurement does not exist.
 - `409`: already `predicting`/`completed`, or prediction already stored;
   check the record and do not spawn another prediction.
-- `502`: Serving/prediction failed; Backend attempts to mark the **same**
-  measurement as `failed`. Display the retry UI only after confirming that
-  the measurement was successfully created and is in `failed` state.
+- `422`: the measurement lacks an image or sensor path, or Serving rejected the
+  input files (HTTP 400 from Serving), returned as
+  `detail: {code: "INPUT_REJECTED", message, measurement_id}`. The measurement
+  is marked `failed`; retrying the same files will be rejected again, so offer
+  a re-upload instead of a retry.
+- `502`: any other Serving/prediction failure (error, connection failure,
+  timeout); Backend attempts to mark the **same** measurement as `failed`.
+  Display the retry UI only after confirming that the measurement was
+  successfully created and is in `failed` state.
 - `503`: feature disabled or server auth misconfigured; operator action needed.
 - Backend container crash can leave `predicting`. **Never** auto-reset it on a
   button click. An operator must verify that workers are not still running
-  before using the existing 30-minute-minimum recovery procedure.
+  before using the existing 30-minute-minimum recovery procedure
+  (`scripts/recover_stale_prediction.py`).
 - Do not claim upload files are preserved until a `measurement_id` was
   returned and/or the DB record and object paths have been verified.
 
@@ -88,10 +112,11 @@ All requests below use same-origin HTTPS with `credentials: "include"`.
 ## Verification before any merge/deploy
 
 ```powershell
-python -m pytest -q tests/test_prediction_execution.py tests/test_prediction_operator_session.py
-python -m pytest -q
+uv run python -m pytest -q tests/test_prediction_execution.py tests/test_prediction_operator_session.py
+uv run python -m pytest -q
 ```
 
-The new security tests are offline. A real E2E test against Serving + RDS and
+The security tests are offline. As of 2026-11-20 the full local suite reports
+`277 passed, 10 skipped`. A real E2E test against Serving + RDS and
 Object Storage is a **separate approved step**; do not enable or deploy it
 merely because unit tests pass.
