@@ -232,3 +232,21 @@ def test_missing_private_key_blocks_before_storage(client, enabled, monkeypatch)
     monkeypatch.setattr(auto_prediction, "create_measurement", upload)
     assert post(client).status_code == 503
     upload.assert_not_awaited()
+
+
+def test_input_rejected_returns_422_without_retry_cookie(client, enabled, monkeypatch):
+    # Serving 400 = the files themselves are unusable; retrying cannot help.
+    monkeypatch.setattr(auto_prediction, "create_measurement", AsyncMock(return_value={"measurement_id": 922}))
+    rejected = HTTPException(422, {
+        "code": "INPUT_REJECTED",
+        "message": "모델이 입력 파일을 처리할 수 없습니다: 유효한 절삭 구간이 없습니다.",
+        "measurement_id": 922,
+    })
+    monkeypatch.setattr(auto_prediction, "execute_prediction", Mock(side_effect=rejected))
+    response = post(client)
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "INPUT_REJECTED"
+    assert detail["measurement_id"] == 922
+    assert "유효한 절삭 구간이 없습니다." in detail["message"]
+    assert "cnc_wp_retry" not in response.headers.get("set-cookie", "")

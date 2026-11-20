@@ -14,6 +14,8 @@ from fastapi import (
     UploadFile,
 )
 
+from PIL import Image
+
 from app.core.database import get_connection
 from app.services.upload_storage import (
     delete_uploaded_object,
@@ -29,6 +31,14 @@ router = APIRouter(
 
 MAX_IMAGE_SIZE = 8 * 1024 * 1024
 MAX_SENSOR_SIZE = 20 * 1024 * 1024
+
+# Serving(ml/serving/service.py)과 맞춘 입력 기준입니다.
+FIXED_CROP = (1150, 670, 1750, 1070)
+CROPPED_IMAGE_SIZE = (600, 400)
+MAX_IMAGE_PIXELS = 50_000_000
+# 모델 checkpoint의 window_size(512). 절삭 구간이 이보다 짧으면
+# 추론 window를 만들 수 없으므로 파일 전체 행 수의 하한으로 사용합니다.
+MIN_SENSOR_ROWS = 512
 
 
 def detect_image_type(
@@ -59,6 +69,53 @@ def detect_image_type(
     )
 
 
+def validate_image_dimensions(
+    data: bytes,
+) -> tuple[int, int]:
+    """
+    Serving(ml/serving/service.py determine_crop)과 같은 기준으로
+    이미지를 실제로 디코딩하고 크기를 확인합니다.
+
+    - 600x400: 이미 ROI crop된 이미지
+    - 그 외: FIXED_CROP(1150, 670, 1750, 1070)을 적용할 수 있어야 함
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            if image.format not in {"PNG", "JPEG"}:
+                raise ValueError
+            width, height = image.size
+            if width * height > MAX_IMAGE_PIXELS:
+                raise HTTPException(
+                    status_code=422,
+                    detail="이미지 해상도가 너무 큽니다.",
+                )
+            # 헤더만이 아니라 픽셀 데이터까지 읽어 손상 여부를 확인합니다.
+            image.load()
+    except HTTPException:
+        raise
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="이미지 파일을 열 수 없습니다. 손상되었거나 지원하지 않는 형식입니다.",
+        ) from exc
+
+    if (width, height) == CROPPED_IMAGE_SIZE:
+        return width, height
+
+    _, _, crop_right, crop_bottom = FIXED_CROP
+    if width < crop_right or height < crop_bottom:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"이미지 크기 {width}x{height}는 지원하지 않습니다. "
+                f"{CROPPED_IMAGE_SIZE[0]}x{CROPPED_IMAGE_SIZE[1]} ROI 이미지이거나 "
+                f"{crop_right}x{crop_bottom} 이상인 고정 카메라 원본이어야 합니다."
+            ),
+        )
+
+    return width, height
+
+
 def validate_sensor_csv(
     data: bytes,
 ) -> tuple[int, datetime, datetime]:
@@ -87,6 +144,7 @@ def validate_sensor_csv(
         first_timestamp = None
         previous_timestamp = None
         last_timestamp = None
+        expected_interval = None
 
         for cells in reader:
             if not cells:
@@ -137,15 +195,33 @@ def validate_sensor_csv(
                 )
             )
 
-            if (
-                previous_timestamp is not None
-                and current_timestamp
-                < previous_timestamp
-            ):
-                raise ValueError(
-                    "Sensor timestamp가 "
-                    "시간순으로 정렬되어 있지 않습니다."
-                )
+            if previous_timestamp is not None:
+                try:
+                    interval = (
+                        current_timestamp
+                        - previous_timestamp
+                    )
+                except TypeError:
+                    raise ValueError(
+                        "Sensor timestamp의 시간대 표기가 "
+                        "행마다 다릅니다."
+                    ) from None
+
+                # Serving은 중복·역행 timestamp를 거절합니다.
+                if interval.total_seconds() <= 0:
+                    raise ValueError(
+                        "Sensor timestamp가 중복되거나 "
+                        "시간순으로 정렬되어 있지 않습니다."
+                    )
+
+                # Serving은 파일 내 샘플링 간격이 일정해야 합니다.
+                if expected_interval is None:
+                    expected_interval = interval
+                elif interval != expected_interval:
+                    raise ValueError(
+                        "Sensor timestamp 간격이 일정하지 않습니다 "
+                        f"({row_count + 1}번째 행)."
+                    )
 
             if first_timestamp is None:
                 first_timestamp = (
@@ -163,15 +239,13 @@ def validate_sensor_csv(
             row_count += 1
 
         if (
-            row_count < 2
+            row_count < MIN_SENSOR_ROWS
             or first_timestamp is None
             or last_timestamp is None
-            or last_timestamp
-            <= first_timestamp
         ):
             raise ValueError(
-                "Sensor CSV에는 최소 2개 이상의 "
-                "시간순 데이터가 필요합니다."
+                f"Sensor CSV에는 최소 {MIN_SENSOR_ROWS}개 이상의 "
+                f"데이터 행이 필요합니다 (현재 {row_count}행)."
             )
 
         return (
@@ -251,6 +325,10 @@ async def create_measurement(
         detect_image_type(
             image_data
         )
+    )
+
+    validate_image_dimensions(
+        image_data
     )
 
     (

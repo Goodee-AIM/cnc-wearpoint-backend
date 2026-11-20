@@ -9,7 +9,10 @@ from fastapi import HTTPException
 
 from app.core.database import get_connection
 from app.core.wear_policy import WARNING_UM, DANGER_UM
-from app.services.prediction_execution import request_serving_prediction, validate_model_result
+from app.services.prediction_execution import (
+    ServingInputRejected, input_rejected_error,
+    request_serving_prediction, validate_model_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +96,9 @@ def execute_manual_replay_prediction(measurement_id: int):
         return _save_replay(measurement_id, image_key, sensor_key, result)
     except HTTPException:
         raise
+    except ServingInputRejected as exc:
+        logger.warning("Serving rejected replay input (measurement_id=%s): %s", measurement_id, exc.reason)
+        raise input_rejected_error(measurement_id, exc) from None
     except Exception:
         logger.exception("Set test replay inference failed (measurement_id=%s)", measurement_id)
         raise HTTPException(502, "Set test replay prediction failed") from None

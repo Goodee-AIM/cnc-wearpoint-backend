@@ -215,7 +215,7 @@ def test_failed_update_uses_original_claim(monkeypatch):
     prediction.mark_measurement_failed(319, TEST_CLAIM)
     sql, params = conn.cursor_obj.execute.call_args.args
     assert "prediction_claim_id = %s" in sql
-    assert params == (319, TEST_CLAIM)
+    assert params == ("Prediction processing failed", 319, TEST_CLAIM)
 
 
 def recovery_row(*, stale=True, claim=TEST_CLAIM, status="predicting", started=True):
@@ -281,3 +281,46 @@ def test_recovery_minimum_age_is_enforced(monkeypatch):
     with pytest.raises(ValueError, match="30 minutes"):
         prediction.recover_stale_prediction(319, min_age_minutes=5)
     connect.assert_not_called()
+
+
+def test_serving_400_is_input_rejected_422_and_marks_failed(client, token_env, monkeypatch):
+    claim = fake_db({"image_path": "i.png", "sensor_path": "s.csv", "status": "ready"})
+    failure = fake_db()
+    connections = iter([claim, failure])
+    monkeypatch.setattr(prediction, "get_connection", lambda: next(connections))
+    monkeypatch.setattr(prediction, "request_serving_prediction",
+                        Mock(side_effect=prediction.ServingInputRejected("유효한 절삭 구간이 없습니다.")))
+    response = client.post("/api/measurements/319/predict", headers={"X-Prediction-Token": "test-private-token"})
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "INPUT_REJECTED"
+    assert "유효한 절삭 구간이 없습니다." in detail["message"]
+    sql, params = failure.cursor_obj.execute.call_args.args
+    assert "status = 'failed'" in sql
+    assert params[0] == "Input rejected by model"
+
+
+def _http_error(code, body):
+    import io
+    import urllib.error
+    return urllib.error.HTTPError("http://serving/predictions", code, "x", {}, io.BytesIO(body))
+
+
+@pytest.mark.parametrize("code,body,expected", [
+    (400, '{"detail": "timestamp 간격이 일정하지 않습니다."}'.encode(), "timestamp 간격이 일정하지 않습니다."),
+    (400, b"<html>not json</html>", prediction.INPUT_REJECTED_FALLBACK),
+    (400, b'{"detail": [{"loc": "x"}]}', prediction.INPUT_REJECTED_FALLBACK),
+])
+def test_request_serving_maps_400_to_input_rejected(monkeypatch, code, body, expected):
+    monkeypatch.setattr(prediction, "read_input_object", lambda key, limit: b"x")
+    monkeypatch.setattr(prediction.urllib.request, "urlopen", Mock(side_effect=_http_error(code, body)))
+    with pytest.raises(prediction.ServingInputRejected) as error:
+        prediction.request_serving_prediction("a.png", "s.csv")
+    assert error.value.reason == expected
+
+
+def test_request_serving_500_stays_retryable_runtime_error(monkeypatch):
+    monkeypatch.setattr(prediction, "read_input_object", lambda key, limit: b"x")
+    monkeypatch.setattr(prediction.urllib.request, "urlopen", Mock(side_effect=_http_error(500, b"{}")))
+    with pytest.raises(RuntimeError, match="HTTP 500"):
+        prediction.request_serving_prediction("a.png", "s.csv")

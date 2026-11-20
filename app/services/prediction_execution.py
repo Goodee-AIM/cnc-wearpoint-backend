@@ -128,6 +128,40 @@ def read_input_object(object_key: str, max_bytes: int) -> bytes:
     return data
 
 
+class ServingInputRejected(Exception):
+    """Serving rejected the input files themselves (HTTP 400).
+
+    Unlike an outage, retrying the same image/CSV cannot succeed, so callers
+    must report it as an input error instead of offering a retry.
+    """
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+INPUT_REJECTED_FALLBACK = "모델이 입력 파일을 처리할 수 없습니다."
+
+
+def _rejection_reason(exc: urllib.error.HTTPError) -> str:
+    """Serving's FastAPI `detail` string, bounded; never echo arbitrary bodies."""
+    try:
+        detail = json.loads(exc.read(4096)).get("detail")
+    except Exception:
+        detail = None
+    if not isinstance(detail, str) or not detail.strip():
+        return INPUT_REJECTED_FALLBACK
+    return detail.strip()[:200]
+
+
+def input_rejected_error(measurement_id: int, exc: ServingInputRejected) -> HTTPException:
+    return HTTPException(422, {
+        "code": "INPUT_REJECTED",
+        "message": f"모델이 입력 파일을 처리할 수 없습니다: {exc.reason}",
+        "measurement_id": measurement_id,
+    })
+
+
 def _multipart_file(boundary: str, name: str, filename: str, data: bytes) -> bytes:
     content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     # Use a fixed field name; strip unsafe user-controlled filename characters.
@@ -164,6 +198,8 @@ def request_serving_prediction(image_key: str, sensor_key: str) -> dict:
                 raise RuntimeError("Serving returned an unexpected HTTP status")
             result = json.loads(response.read(64 * 1024))
     except urllib.error.HTTPError as exc:
+        if exc.code == 400:
+            raise ServingInputRejected(_rejection_reason(exc)) from exc
         raise RuntimeError(f"Serving returned HTTP {exc.code}") from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise RuntimeError("Serving is unavailable") from exc
@@ -263,15 +299,16 @@ def persist_prediction(measurement_id: int, result: dict, claim_id: str) -> dict
     return _db_operation(operation)
 
 
-def mark_measurement_failed(measurement_id: int, claim_id: str):
+def mark_measurement_failed(measurement_id: int, claim_id: str,
+                            error_message: str = "Prediction processing failed"):
     def operation(cursor):
         cursor.execute(
             "UPDATE measurements SET status = 'failed', "
-            "error_message = 'Prediction processing failed', "
+            "error_message = %s, "
             "prediction_claim_id = NULL, prediction_started_at = NULL "
             "WHERE id = %s AND status = 'predicting' "
             "AND prediction_claim_id = %s",
-            (measurement_id, claim_id),
+            (error_message, measurement_id, claim_id),
         )
     _db_operation(operation)
 
@@ -351,6 +388,13 @@ def execute_prediction(measurement_id: int) -> dict:
     try:
         result = request_serving_prediction(image_key, sensor_key)
         return persist_prediction(measurement_id, result, claim_id)
+    except ServingInputRejected as exc:
+        logger.warning("Serving rejected input (measurement_id=%d): %s", measurement_id, exc.reason)
+        try:
+            mark_measurement_failed(measurement_id, claim_id, "Input rejected by model")
+        except Exception:
+            logger.exception("Unable to mark failed (measurement_id=%d)", measurement_id)
+        raise input_rejected_error(measurement_id, exc) from None
     except Exception:
         logger.exception("Prediction failed (measurement_id=%d)", measurement_id)
         try:

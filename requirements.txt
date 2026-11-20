@@ -39,6 +39,8 @@ opentelemetry-api==1.45.2
     # via fastapi
 pandas==2.2.3
     # via cnc-wearpoint-backend
+pillow==13.0.0
+    # via cnc-wearpoint-backend
 pydantic==2.14.2
     # via fastapi
 pydantic-core==2.50.2
