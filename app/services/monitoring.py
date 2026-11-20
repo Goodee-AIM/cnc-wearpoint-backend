@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from app.services.storage import get_image_path
+from app.services.playback_speed import PLAYBACK_RATE, scaled_elapsed_ms
 
 
 PHOTO_DURATION_MS = 2000
@@ -90,10 +91,11 @@ def build_schedule(measurements, images_by_set):
 
 
 def elapsed_ms(state, now):
-    elapsed = state["elapsed_ms"]
-    if state["status"] == "running":
-        elapsed += max(0, int((now - state["resumed_at"]).total_seconds() * 1000))
-    return elapsed
+    return scaled_elapsed_ms(
+        state["elapsed_ms"],
+        state["resumed_at"] if state["status"] == "running" else None,
+        now,
+    )
 
 
 def state_response(state, items, now):
@@ -133,6 +135,7 @@ def state_response(state, items, now):
         "cycle_number": cycle,
         "cycle_elapsed_ms": cycle_elapsed,
         "loop_enabled": True,
+        "playback_rate": PLAYBACK_RATE,
         "total_duration_ms": total_ms,
         "sets": sets,
     }

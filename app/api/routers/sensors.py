@@ -1,7 +1,7 @@
 import re
 
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.services.storage import (
@@ -124,3 +124,24 @@ def get_sensor_cutting_segment(set_id: str, filename: str):
         code = str(exc.response.get("Error", {}).get("Code", ""))
         status = 404 if code in {"404", "NoSuchKey", "NotFound"} else 502
         raise HTTPException(status_code=status, detail="센서 구간 조회에 실패했습니다.") from exc
+
+@router.post("/cutting-segment")
+def describe_uploaded_sensor_cutting_segment(sensor_csv: UploadFile):
+    """Set test CSV: calculate the same boundaries without DB/storage/inference writes."""
+    from app.services.cutting_segment import describe_cutting_segment
+
+    max_bytes = 20 * 1024 * 1024
+    try:
+        if not (sensor_csv.filename or "").lower().endswith(".csv"):
+            raise HTTPException(status_code=422, detail="센서 CSV 파일을 선택해 주세요.")
+        content = sensor_csv.file.read(max_bytes + 1)
+        if len(content) > max_bytes:
+            raise HTTPException(status_code=413, detail="센서 CSV는 20MB 이하여야 합니다.")
+        if not content:
+            raise HTTPException(status_code=422, detail="센서 CSV가 비어 있습니다.")
+        try:
+            return describe_cutting_segment(content)
+        except (ValueError, UnicodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        sensor_csv.file.close()

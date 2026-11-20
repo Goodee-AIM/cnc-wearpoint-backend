@@ -7,6 +7,7 @@ then advances to the next measurement. This feature is OFF by default.
 import os
 from datetime import timedelta
 from app.services.monitoring_inference_alerts import record_showing_alert
+from app.services.playback_speed import PLAYBACK_RATE, scaled_elapsed_ms
 
 RESULT_HOLD_MS = 3000
 
@@ -16,11 +17,13 @@ def gate_enabled():
 
 
 def elapsed_ms(gate, now, is_running=True):
-    accumulated = int(gate['phase_elapsed_ms'])
-    started = gate.get('phase_started_at')
-    if is_running and started is not None:
-        accumulated += max(0, int((now - started).total_seconds() * 1000))
-    return accumulated
+    # Sensor progress is in source milliseconds; result hold uses real time.
+    rate = PLAYBACK_RATE if gate['phase'] == 'playing' else 1
+    return scaled_elapsed_ms(
+        gate['phase_elapsed_ms'],
+        gate.get('phase_started_at') if is_running else None,
+        now, rate=rate,
+    )
 
 
 def initialize_gates(cursor, state, items, now):
@@ -90,11 +93,12 @@ def project_gated_state(base, items, gates, now):
                        'image_url': f"/api/images/set{scheduled['set_number']}/{quote(scheduled['image_name'], safe='')}",
                        'sensor_url': sensor_url,
                        'playback_phase': phase,
+                       'playback_rate': PLAYBACK_RATE,
                        'result_visible': phase == 'showing',
                        'cycle_number': int(gate['cycle_number']),
                        'playback_generation': int(gate['playback_generation']),
                        'phase_elapsed_ms': min(RESULT_HOLD_MS, elapsed_ms(gate, now, base['status'] == 'running')) if phase == 'showing' else 0})
-    return {**base, 'sets': mapped, 'gated_playback': True}
+    return {**base, 'sets': mapped, 'gated_playback': True, 'playback_rate': PLAYBACK_RATE}
 
 
 def _transition(cursor, gate, phase, now, elapsed=0, *, position=None,
