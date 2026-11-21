@@ -44,6 +44,8 @@
 
 > **변경 기록 (2026-11-20 오후):** 모니터링 추론 지연(추론 평균 약 5.2초, 대기 최대 43초) 대응으로 Serving env `MODEL_ALIAS`를 `candidate-opt`로 바꿔 **V2로 전환**했습니다(방식 A, Registry Alias 변경 없음). 전환 후 `/health` = `model_alias: candidate-opt, model_version: 2`. 전환 근거: 로컬 비교에서 V1/V2 출력 9개 필드 완전 동일, 지연 시간 2.28초 → 0.23초(TEST_PLAN INF-00). 전환 후 운영 측정(최근 20건): 추론 0.8~1.7초(평균 약 1.1초), 대기 0.1~2.1초, 전부 `model_version` 2. 이 절의 위 표는 전환 전 상태입니다.
 
+> **변경 기록 (2026-11-21):** 이미지를 `quay.io/melona240/cnc-wearpoint-serving:v0.1.2`(digest `sha256:c9652af7…`, 커밋 `46e4048`)로 교체하고, `MODEL_ALIAS`를 `production`으로 바꿨습니다. Registry에 `production` alias를 새로 만들었습니다(현재 v2, `lifecycle.production.previous_version = 1`). 현재 `/health` = `model_alias: production, model_version: 2, model_run_id: 98c32cdb968d4f57b77330db6c13baf4`. 백업 파일은 `/opt/cnc-wearpoint/serving/compose.yaml.bak-20261121`, `/etc/cnc-wearpoint/inference.env.bak-20261121`입니다(교체 전 상태: `f38806e`, `candidate-opt`). 평가·승격·롤백 기록은 [검증 보고서 0장](MODEL_LIFECYCLE_VERIFICATION_REPORT.md)을 참고하세요.
+
 ### 0.3 MLflow Registry (mlflow 3.18.0)
 
 | 항목 | Version 1 | Version 2 |

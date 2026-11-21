@@ -10,6 +10,23 @@
 
 ---
 
+## 현행 절차 (2026-11-21~): `production` alias + `model_lifecycle.py`
+
+운영 Serving은 `MODEL_ALIAS=production`을 사용합니다. 아래 3·5장의 방식 A/B는 이 체계를 도입하기 전의 수동 절차입니다. 지금은 다음 순서를 따릅니다. 2026-11-21에 실제로 실행해 검증했습니다([검증 보고서 0.3절](MODEL_LIFECYCLE_VERIFICATION_REPORT.md)).
+
+1. **평가 [Registry 태그 쓰기]** — 로컬 torch 환경(`.venv-eval`)에서, 고정 manifest와 같은 `--type-map`을 사용합니다.
+   `python ml/lifecycle/model_lifecycle.py evaluate --version N --manifest ml/lifecycle/eval/test_sets_manifest.csv --type-map "adhesion=other_wear,flank_wear+adhesion=other_wear"`
+2. **비교 [조회]** — `compare --version <현재> --other N`, `status`
+3. **승격 [운영 변경 / 승인 필요]** — `promote --version N --alias production --dry-run`으로 확인한 뒤 실제로 실행합니다. 평가가 없거나, 같은 데이터셋 기준으로 MAE가 더 나쁘면 거부됩니다(`--force`로만 무시 가능).
+4. **반영 [운영 변경 / 승인 필요]** — VM에서 `sudo docker compose -f /opt/cnc-wearpoint/serving/compose.yaml up -d --force-recreate`를 실행합니다. Serving은 기동할 때만 alias를 읽고, 재시작하는 동안 추론이 수십 초 끊깁니다.
+5. **검증 [조회]** — `curl -s http://127.0.0.1:8001/health`에서 `model_alias: production`, `model_version`, `model_run_id`가 Registry와 같은지 확인하고, 로그의 `Loaded model …` 줄도 봅니다.
+6. **롤백 [운영 변경 / 승인 필요]** — `rollback --alias production`을 실행한 뒤 4~5단계를 반복합니다. 직전 버전은 Registry 태그 `lifecycle.production.previous_version`에 남아 있고, 롤백할 때마다 현재 버전과 서로 맞바뀝니다.
+
+- 모든 명령에는 `MLFLOW_TRACKING_URI`(또는 `--tracking-uri`)를 직접 지정해야 합니다. 운영 기본값은 없습니다.
+- MLflow·nginx 장애 중에는 재시작하지 않습니다(Serving은 기동할 때 MLflow 접속에 실패하면 시작되지 않음).
+
+---
+
 ## 0. 반드시 알아야 할 동작 (코드 근거)
 
 1. **alias는 Serving 기동 시 한 번만 해석됩니다.** 실행 중에는 alias를 옮겨도 반영되지 않고, 컨테이너를 재시작해야 반영됩니다(ml/serving/service.py:94-102). reload API는 없습니다(service.py:116-130).
