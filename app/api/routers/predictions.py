@@ -1,12 +1,13 @@
 """Model prediction: private server token OR HTTPS HttpOnly operator session."""
 
-from fastapi import APIRouter, Header, Path, Request, Response
+from fastapi import APIRouter, HTTPException, Header, Path, Request, Response
 from pydantic import BaseModel, Field
 
 from app.core.prediction_session import (
     login_operator, logout_operator, operator_session_exists, require_operator_session,
 )
 from app.services.prediction_execution import check_prediction_access, execute_prediction
+from app.services.inference_capacity import manual_inference_slots as _inference_slots
 
 router = APIRouter(prefix="/api/measurements", tags=["predictions"])
 auth_router = APIRouter(prefix="/api/prediction-auth", tags=["prediction-auth"])
@@ -45,4 +46,18 @@ def predict_measurement(
     else:
         # A browser calls this endpoint with a short-lived HttpOnly cookie.
         require_operator_session(request)
-    return execute_prediction(measurement_id)
+    # Share capacity with Set test upload/replay/retry and historical alert re-inference.
+    # Keep authorization outside the capacity slot: bad requests never consume it.
+    if not _inference_slots.acquire(blocking=False):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "PREDICTION_BUSY",
+                "message": "다른 AI 분석이 진행 중입니다. 잠시 후 다시 시도해 주세요.",
+            },
+            headers={"Retry-After": "30"},
+        )
+    try:
+        return execute_prediction(measurement_id)
+    finally:
+        _inference_slots.release()

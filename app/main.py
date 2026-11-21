@@ -3,6 +3,7 @@ import os
 from contextlib import asynccontextmanager
 
 from app.api.routers.monitoring_alerts import router as monitoring_alerts_router
+from app.api.routers.historical_reinfer import router as historical_reinfer_router
 from app.services.monitoring_alerts import run_alert_worker
 from app.api.routers.monitoring import router as monitoring_router
 from app.api.routers.monitoring_inference import router as monitoring_inference_router
@@ -70,6 +71,7 @@ app.include_router(monitoring_router)
 app.include_router(monitoring_inference_router)
 
 app.include_router(monitoring_alerts_router)
+app.include_router(historical_reinfer_router)
 
 app.include_router(manual_inputs_router)
 
