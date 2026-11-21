@@ -20,6 +20,9 @@ python ml/lifecycle/model_lifecycle.py rollback --alias production
 | `evaluate` | 지정 버전으로 manifest 전체를 추론해 MAE·RMSE·유형 정확도를 계산합니다. 결과는 평가 run(metrics + manifest artifact)과 version 태그(`eval.*`)로 기록합니다 | version 태그만 |
 | `promote` | 게이트를 통과하면 alias를 옮기고, 직전 버전을 `lifecycle.<alias>.previous_version` 태그에 남깁니다 | alias + 태그 |
 | `rollback` | alias를 직전 버전으로 되돌립니다. 다시 실행하면 원래 버전으로 돌아갑니다 | alias + 태그 |
+| `compare --version A --other B` | 두 버전의 `eval/predictions.csv`를 행 단위로 비교합니다(같은 manifest일 때만) | 없음 |
+
+`evaluate`는 전체 지표와 함께 **Set별 지표**(`set4.mae_um`, `set16.type_accuracy` 등, run metrics)와 **396건 개별 예측**(`eval/predictions.csv`: 정답, 예측값(전체 정밀도), 확률, 절대오차)을 평가 run에 기록합니다. 이 기능을 넣기 전에 평가한 run에는 `predictions.csv`가 없으므로, `compare`를 쓰려면 다시 평가해야 합니다.
 
 `evaluate`는 Serving과 같은 환경(torch, `ml/serving` 코드)에서 실행해야 합니다. 같은 ROI 규칙(`service.determine_crop`)을 사용합니다.
 

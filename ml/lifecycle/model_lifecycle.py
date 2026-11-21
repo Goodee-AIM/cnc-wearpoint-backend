@@ -4,6 +4,10 @@
     python ml/lifecycle/model_lifecycle.py evaluate --version 2 --manifest eval/manifest.csv
     python ml/lifecycle/model_lifecycle.py promote  --version 2 --alias production [--dry-run]
     python ml/lifecycle/model_lifecycle.py rollback --alias production [--dry-run]
+    python ml/lifecycle/model_lifecycle.py compare  --version 1 --other 2
+
+`evaluate` logs overall + per-set metrics (set4.mae_um, ...) and every
+prediction as eval/predictions.csv; `compare` diffs two versions row by row.
 
 Run `evaluate` inside the Serving environment (needs torch + ml/serving code).
 `status` / `promote` / `rollback` only talk to the Registry.
@@ -28,6 +32,7 @@ import hashlib
 import math
 import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -78,6 +83,8 @@ def read_manifest(path: Path) -> list[dict]:
             }
             if all((row.get(c) or "").strip() for c in CROP_COLUMNS):
                 item["crop"] = tuple(int(row[c]) for c in CROP_COLUMNS)
+            if (row.get("set") or "").strip():
+                item["set"] = int(float(row["set"]))
             rows.append(item)
     if not rows:
         raise LifecycleError("manifest has no rows")
@@ -122,6 +129,67 @@ def compute_metrics(labels: list[dict], predictions: list[dict], type_map: dict 
     }
 
 
+def per_set_metrics(labels: list[dict], predictions: list[dict],
+                    type_map: dict | None = None) -> dict:
+    """compute_metrics per manifest `set` (rows without a set are grouped as None)."""
+    groups = {}
+    for label, prediction in zip(labels, predictions):
+        groups.setdefault(label.get("set"), ([], []))
+        groups[label.get("set")][0].append(label)
+        groups[label.get("set")][1].append(prediction)
+    return {key: compute_metrics(ls, ps, type_map)
+            for key, (ls, ps) in sorted(groups.items(), key=lambda kv: (kv[0] is None, kv[0] or 0))}
+
+
+PREDICTION_COLUMNS = [
+    "set", "image", "sensor", "wear_um", "type", "expected_type",
+    "predicted_wear_um", "predicted_type", "flank_wear_probability", "abs_error_um",
+]
+
+
+def prediction_rows(labels: list[dict], predictions: list[dict],
+                    type_map: dict | None = None) -> list[dict]:
+    """One row per manifest entry; logged as eval/predictions.csv."""
+    type_map = type_map or {}
+    rows = []
+    for label, prediction in zip(labels, predictions):
+        wear = float(prediction["predicted_wear_um"])
+        rows.append({
+            "set": label.get("set", ""),
+            "image": Path(label["image_path"]).name,
+            "sensor": Path(label["sensor_path"]).name,
+            "wear_um": label["wear_um"],
+            "type": label["type"],
+            "expected_type": type_map.get(label["type"], label["type"]),
+            "predicted_wear_um": repr(wear),  # full float precision for exact comparison
+            "predicted_type": str(prediction["predicted_type"]),
+            "flank_wear_probability": repr(float(prediction.get("flank_wear_probability", "nan"))),
+            "abs_error_um": abs(wear - label["wear_um"]),
+        })
+    return rows
+
+
+def compare_predictions(rows_a: list[dict], rows_b: list[dict]) -> dict:
+    """Row-level comparison of two eval/predictions.csv files (same manifest)."""
+    key = lambda r: (str(r["image"]), str(r["sensor"]))  # noqa: E731
+    a = {key(r): r for r in rows_a}
+    b = {key(r): r for r in rows_b}
+    common = sorted(set(a) & set(b))
+    wear_diffs = [abs(float(a[k]["predicted_wear_um"]) - float(b[k]["predicted_wear_um"])) for k in common]
+    prob_diffs = [abs(float(a[k]["flank_wear_probability"]) - float(b[k]["flank_wear_probability"]))
+                  for k in common]
+    type_mismatch = [k for k in common if a[k]["predicted_type"] != b[k]["predicted_type"]]
+    return {
+        "rows_a": len(a), "rows_b": len(b), "common": len(common),
+        "only_a": len(set(a) - set(b)), "only_b": len(set(b) - set(a)),
+        "identical_wear": sum(d == 0 for d in wear_diffs),
+        "max_wear_diff_um": max(wear_diffs, default=0.0),
+        "max_probability_diff": max(prob_diffs, default=0.0),
+        "type_mismatches": len(type_mismatch),
+        "type_mismatch_examples": type_mismatch[:5],
+    }
+
+
 def evaluate(client, mlflow, name: str, version: str, manifest: Path,
              type_map: dict | None = None) -> dict:
     sys.path.insert(0, str(SERVING_DIR))
@@ -137,6 +205,8 @@ def evaluate(client, mlflow, name: str, version: str, manifest: Path,
     model = mlflow.pyfunc.load_model(f"models:/{name}/{version}")
     predictions = model.predict(model_input).to_dict(orient="records")
     metrics = compute_metrics(labels, predictions, type_map)
+    by_set = per_set_metrics(labels, predictions, type_map)
+    rows = prediction_rows(labels, predictions, type_map)
     dataset = manifest_sha256(manifest)
     map_text = ",".join(f"{k}={v}" for k, v in sorted((type_map or {}).items())) or "none"
 
@@ -147,7 +217,21 @@ def evaluate(client, mlflow, name: str, version: str, manifest: Path,
         mlflow.log_metrics({k: float(metrics[k]) for k in ("mae_um", "rmse_um", "n")})
         if metrics["type_accuracy"] is not None:
             mlflow.log_metric("type_accuracy", metrics["type_accuracy"])
+        for set_no, m in by_set.items():
+            if set_no is None:
+                continue
+            prefix = f"set{set_no}."
+            mlflow.log_metrics({prefix + k: float(m[k]) for k in ("mae_um", "rmse_um", "n")})
+            if m["type_accuracy"] is not None:
+                mlflow.log_metric(prefix + "type_accuracy", m["type_accuracy"])
         mlflow.log_artifact(str(manifest), artifact_path="eval")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "predictions.csv"
+            with path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=PREDICTION_COLUMNS)
+                writer.writeheader()
+                writer.writerows(rows)
+            mlflow.log_artifact(str(path), artifact_path="eval")
         run_id = run.info.run_id
 
     for key, value in ((TAG_MAE, f"{metrics['mae_um']:.5f}"),
@@ -159,7 +243,22 @@ def evaluate(client, mlflow, name: str, version: str, manifest: Path,
                        (TAG_DATASET, dataset),
                        (TAG_RUN, run_id)):
         client.set_model_version_tag(name, str(version), key, value)
-    return {**metrics, "dataset_sha256": dataset, "run_id": run_id}
+    return {**metrics, "per_set": by_set, "dataset_sha256": dataset, "run_id": run_id}
+
+
+def load_eval_predictions(client, mlflow, name: str, version: str) -> tuple[list[dict], dict]:
+    tags = eval_tags(client, name, version)
+    if TAG_RUN not in tags:
+        raise LifecycleError(f"v{version} has no evaluation run; run `evaluate` first")
+    try:
+        path = mlflow.artifacts.download_artifacts(
+            run_id=tags[TAG_RUN], artifact_path="eval/predictions.csv")
+    except Exception as exc:
+        raise LifecycleError(
+            f"v{version} evaluation run {tags[TAG_RUN]} has no eval/predictions.csv "
+            f"(evaluated before per-row logging); re-run `evaluate`") from exc
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f)), tags
 
 
 # ------------------------------------------------------- promote / rollback
@@ -252,6 +351,9 @@ def main(argv=None):
     p = sub.add_parser("rollback")
     p.add_argument("--alias", required=True)
     p.add_argument("--dry-run", action="store_true")
+    p = sub.add_parser("compare", help="Row-level diff of two versions' evaluation predictions (read-only)")
+    p.add_argument("--version", required=True)
+    p.add_argument("--other", required=True)
     args = parser.parse_args(argv)
 
     if not args.tracking_uri:
@@ -285,9 +387,27 @@ def main(argv=None):
             print(f"v{args.version}: MAE={result['mae_um']:.3f} µm RMSE={result['rmse_um']:.3f} µm "
                   f"type_acc={'n/a' if acc is None else f'{acc:.3f}'} n={result['n']} "
                   f"run_id={result['run_id']}")
+            for set_no, m in result["per_set"].items():
+                set_acc = m["type_accuracy"]
+                print(f"  set {set_no if set_no is not None else '-'}: n={m['n']} "
+                      f"MAE={m['mae_um']:.3f} µm RMSE={m['rmse_um']:.3f} µm "
+                      f"type_acc={'n/a' if set_acc is None else f'{set_acc:.3f}'}")
             if result["unmapped_types"]:
                 print(f"type accuracy unavailable: label types {result['unmapped_types']} "
                       f"need --type-map to a model class {sorted(MODEL_TYPES)}")
+        elif args.command == "compare":
+            rows_a, tags_a = load_eval_predictions(client, mlflow, name, args.version)
+            rows_b, tags_b = load_eval_predictions(client, mlflow, name, args.other)
+            if tags_a.get(TAG_DATASET) != tags_b.get(TAG_DATASET):
+                raise LifecycleError("the two versions were evaluated on different manifests")
+            c = compare_predictions(rows_a, rows_b)
+            print(f"v{args.version} vs v{args.other} (dataset {tags_a[TAG_DATASET][:12]}): "
+                  f"rows {c['rows_a']}/{c['rows_b']}, common {c['common']}, "
+                  f"only_a {c['only_a']}, only_b {c['only_b']}")
+            print(f"  identical predicted_wear_um: {c['identical_wear']}/{c['common']} "
+                  f"(max diff {c['max_wear_diff_um']:.3g} µm)")
+            print(f"  max flank_wear_probability diff: {c['max_probability_diff']:.3g}")
+            print(f"  predicted_type mismatches: {c['type_mismatches']} {c['type_mismatch_examples']}")
         elif args.command == "promote":
             plan = plan_promotion(client, name, args.version, args.alias, args.max_mae, args.force)
             if plan["action"] == "noop":

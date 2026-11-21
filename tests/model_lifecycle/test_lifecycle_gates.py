@@ -160,3 +160,149 @@ def test_read_manifest_rejects_missing_columns(tmp_path):
     (tmp_path / "m.csv").write_text("image_path,wear_um\na.png,1\n", encoding="utf-8")
     with pytest.raises(lc.LifecycleError, match="missing columns"):
         lc.read_manifest(tmp_path / "m.csv")
+
+
+# --- per-set metrics, per-row predictions and version comparison
+
+def _labels_preds():
+    labels = [
+        {"set": 4, "image_path": "/d/a.jpg", "sensor_path": "/d/a.csv", "wear_um": 100.0, "type": "flank_wear"},
+        {"set": 4, "image_path": "/d/b.jpg", "sensor_path": "/d/b.csv", "wear_um": 50.0, "type": "adhesion"},
+        {"set": 16, "image_path": "/d/c.jpg", "sensor_path": "/d/c.csv", "wear_um": 200.0,
+         "type": "flank_wear+adhesion"},
+    ]
+    preds = [
+        {"predicted_wear_um": 110.0, "predicted_type": "flank_wear", "flank_wear_probability": 0.9},
+        {"predicted_wear_um": 44.0, "predicted_type": "other_wear", "flank_wear_probability": 0.2},
+        {"predicted_wear_um": 150.0, "predicted_type": "flank_wear", "flank_wear_probability": 0.7},
+    ]
+    return labels, preds
+
+
+TYPE_MAP = {"adhesion": "other_wear", "flank_wear+adhesion": "other_wear"}
+
+
+def test_per_set_metrics_split_by_manifest_set():
+    labels, preds = _labels_preds()
+    by_set = lc.per_set_metrics(labels, preds, TYPE_MAP)
+    assert list(by_set) == [4, 16]
+    assert by_set[4]["n"] == 2 and by_set[4]["mae_um"] == pytest.approx(8.0)
+    assert by_set[4]["type_accuracy"] == pytest.approx(1.0)
+    assert by_set[16]["mae_um"] == pytest.approx(50.0)
+    assert by_set[16]["type_accuracy"] == pytest.approx(0.0)
+
+
+def test_prediction_rows_keep_full_precision_and_expected_type():
+    labels, preds = _labels_preds()
+    preds[0]["predicted_wear_um"] = 110.12345678901234
+    rows = lc.prediction_rows(labels, preds, TYPE_MAP)
+    assert rows[0]["image"] == "a.jpg" and rows[0]["set"] == 4
+    assert float(rows[0]["predicted_wear_um"]) == 110.12345678901234
+    assert rows[2]["expected_type"] == "other_wear"
+    assert rows[2]["abs_error_um"] == pytest.approx(50.0)
+
+
+def test_compare_predictions_detects_identical_and_different_rows():
+    labels, preds = _labels_preds()
+    a = lc.prediction_rows(labels, preds, TYPE_MAP)
+    same = lc.compare_predictions(a, [dict(r) for r in a])
+    assert same["identical_wear"] == 3 and same["max_wear_diff_um"] == 0
+    assert same["type_mismatches"] == 0 and same["only_a"] == same["only_b"] == 0
+
+    b = [dict(r) for r in a[:2]]
+    b[1]["predicted_wear_um"] = repr(44.5)
+    b[1]["predicted_type"] = "flank_wear"
+    diff = lc.compare_predictions(a, b)
+    assert diff["common"] == 2 and diff["only_a"] == 1
+    assert diff["identical_wear"] == 1
+    assert diff["max_wear_diff_um"] == pytest.approx(0.5)
+    assert diff["type_mismatches"] == 1
+
+
+def test_read_manifest_keeps_set_column(tmp_path):
+    (tmp_path / "m.csv").write_text(
+        "set,image_path,sensor_path,wear_um,type\n16,a.jpg,a.csv,90,flank_wear\n", encoding="utf-8")
+    assert lc.read_manifest(tmp_path / "m.csv")[0]["set"] == 16
+
+
+def test_compare_refuses_versions_without_prediction_artifact():
+    client = FakeClient({1: {lc.TAG_RUN: "run-1", **evaluated(20.0)}})
+
+    class NoArtifacts:
+        class artifacts:
+            @staticmethod
+            def download_artifacts(run_id, artifact_path):
+                raise OSError("not found")
+
+    with pytest.raises(lc.LifecycleError, match="re-run `evaluate`"):
+        lc.load_eval_predictions(client, NoArtifacts, NAME, "1")
+
+
+def test_evaluate_end_to_end_with_fake_mlflow(tmp_path, monkeypatch):
+    """evaluate() writes per-set metrics, predictions.csv and version tags."""
+    import contextlib
+    import sys
+    import pandas as pd
+
+    # service.py imports mlflow at module level; give it inert stand-ins.
+    fake_mlflow = types.ModuleType("mlflow")
+    fake_tracking = types.ModuleType("mlflow.tracking")
+    fake_tracking.MlflowClient = object
+    fake_mlflow.tracking = fake_tracking
+    monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
+    monkeypatch.setitem(sys.modules, "mlflow.tracking", fake_tracking)
+    monkeypatch.delitem(sys.modules, "service", raising=False)
+
+    (tmp_path / "m.csv").write_text(
+        "set,image_path,sensor_path,wear_um,type,crop_left,crop_top,crop_right,crop_bottom\n"
+        "4,a.jpg,a.csv,100,flank_wear,1150,670,1750,1070\n"
+        "16,b.jpg,b.csv,200,flank_wear+adhesion,1790,2045,2390,2445\n", encoding="utf-8")
+
+    seen = {"metrics": {}, "artifacts": {}, "inputs": None}
+
+    class Model:
+        def predict(self, df):
+            seen["inputs"] = df
+            return pd.DataFrame([
+                {"predicted_wear_um": 90.0, "predicted_type": "flank_wear", "flank_wear_probability": 0.8},
+                {"predicted_wear_um": 260.0, "predicted_type": "other_wear", "flank_wear_probability": 0.1},
+            ])
+
+    class FakeMlflow:
+        class pyfunc:
+            @staticmethod
+            def load_model(uri):
+                assert uri == "models:/cnc-wearpoint-multitask/2"
+                return Model()
+
+        @staticmethod
+        @contextlib.contextmanager
+        def start_run(run_name):
+            yield types.SimpleNamespace(info=types.SimpleNamespace(run_id="run-eval"))
+
+        set_tags = set_tag = staticmethod(lambda *a, **k: None)
+
+        @staticmethod
+        def log_metrics(m):
+            seen["metrics"].update(m)
+
+        @staticmethod
+        def log_metric(k, v):
+            seen["metrics"][k] = v
+
+        @staticmethod
+        def log_artifact(path, artifact_path):
+            seen["artifacts"][Path(path).name] = Path(path).read_text(encoding="utf-8")
+
+    client = FakeClient({2: {}})
+    result = lc.evaluate(client, FakeMlflow, NAME, "2", tmp_path / "m.csv", TYPE_MAP)
+
+    assert list(seen["inputs"]["crop_left"]) == [1150, 1790]  # manifest crop, not Serving ROI
+    assert result["mae_um"] == pytest.approx(35.0) and result["type_accuracy"] == pytest.approx(1.0)
+    assert seen["metrics"]["set4.mae_um"] == pytest.approx(10.0)
+    assert seen["metrics"]["set16.mae_um"] == pytest.approx(60.0)
+    assert seen["metrics"]["set16.type_accuracy"] == pytest.approx(1.0)
+    assert "predictions.csv" in seen["artifacts"] and "m.csv" in seen["artifacts"]
+    assert seen["artifacts"]["predictions.csv"].splitlines()[0].split(",") == lc.PREDICTION_COLUMNS
+    assert client.versions["2"][lc.TAG_RUN] == "run-eval"
+    assert client.versions["2"][lc.TAG_MAE] == "35.00000"
