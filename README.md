@@ -16,32 +16,53 @@ AI 모델 추론은 [ml/serving](ml/serving)의 별도 Model Serving Container�
 
 ---
 
+
 ## 전체 아키텍처 개요
 
-![CNC WearPoint MLOps 아키텍처 및 CI/CD 흐름](docs/architecture/images/cnc_wp_mlops_architecture.png)
+![CNC WearPoint 운영 인프라 아키텍처](docs/architecture/images/cnc_wp_mlops_architecture.png)
 
-위 그림은 GitHub 기반 소스 관리부터 GitLab CI/CD, Quay.io 이미지 관리, NHN Cloud 서비스 운영 및 MLflow 모델 관리까지의 전체 구조를 보여줍니다.
+위 그림은 NHN Cloud 기반으로 구축한 CNC WearPoint 서비스의 운영 인프라와 주요 서비스 간 통신 구조를 보여줍니다.
 
-GitHub는 팀의 메인 소스 저장소로 사용하며, GitHub Actions는 GitHub의 `main` 브랜치와 Version Tag를 GitLab으로 동기화하는 역할을 담당합니다.
+운영 환경은 NHN Cloud VPC 내 App Private Subnet과 DB Private Subnet을 분리하여 구성했습니다. App VM에서는 Docker Compose 기반으로 Frontend, FastAPI Backend, Model Serving Container를 운영하며, MLflow Tracking Server는 별도의 systemd 서비스로 실행합니다.
 
-실제 Container Image Build, Version 승격 및 운영 배포는 GitLab CI와 GitLab Runner를 통해 수행합니다.
+사용자는 HTTPS를 통해 서비스에 접근하며, Nginx Reverse Proxy가 단일 진입점으로 동작합니다. Nginx는 요청 경로에 따라 Frontend(`/`), FastAPI Backend(`/api/`), MLflow Tracking Server(`/mlflow/`)로 요청을 전달합니다.
 
-운영 환경에서는 Nginx를 HTTPS 단일 진입점으로 사용하여 요청 경로에 따라 Frontend, FastAPI Backend, MLflow Tracking Server로 요청을 분기합니다.
+서비스의 측정 데이터, 예측 결과 및 알림 이력은 NHN Cloud RDS for MySQL에 저장합니다. MLflow의 실험 이력, Model Registry 및 인증 관련 메타데이터도 동일한 RDS 인스턴스 내 별도 데이터베이스에서 관리합니다.
 
-서비스 이미지·센서 파일과 MLflow Artifact의 NHN Cloud Object Storage 전환을 완료했으며, 실제 AI 모델은 MLflow Model Registry에 등록한 뒤 별도 Model Serving Container를 통해 FastAPI Prediction API와 연동했습니다.
+이미지·센서 CSV와 MLflow 모델 Artifact는 NHN Cloud Object Storage의 Private Bucket에 저장합니다. Backend와 MLflow는 S3 호환 API를 통해 각 저장소에 접근하며, 서비스 파일과 모델 Artifact를 분리하여 관리합니다.
+
+AI 모델 추론은 별도의 Model Serving Container가 담당합니다. Serving은 기동 시 MLflow Model Registry에서 운영 모델 `cnc-wearpoint-multitask`를 로드하고, Backend는 Serving의 `POST /predictions` API를 호출하여 추론 결과를 RDS에 저장합니다.
+
+### 주요 모델 추론 흐름
 
 ```text
-MLflow Model Registry (cnc-wearpoint-multitask)
-        │  Serving 기동 시 1회 Alias → Version 해석 후 Load
-        ▼
-Model Serving Container (ml/serving, Port 8001)
-        │  POST /predictions (image, sensor_csv)
-        ▼
-FastAPI Backend ──▶ RDS cnc_wearpoint (predictions / alerts / monitoring_inference_runs)
+MLflow Model Registry
+(cnc-wearpoint-multitask)
         │
+        │ Serving 기동 시 운영 모델 로드
         ▼
+Model Serving Container
+(Port 8001)
+        ▲
+        │ POST /predictions
+        │ 이미지 + 센서 CSV
+        │
+FastAPI Backend
+        │
+        ├── Object Storage
+        │   이미지·센서 CSV 조회
+        │
+        └── RDS for MySQL
+            예측 결과·알림 이력 저장
+
 Frontend
+    │
+    └── FastAPI를 통한 예측 요청 및 결과 조회
 ```
+
+운영 서비스의 접근 경로와 데이터 저장소를 분리하고, 모델 관리와 추론 서비스를 독립적으로 구성하여 보안성, 유지보수성 및 모델 버전 관리의 편의성을 확보했습니다.
+
+CI/CD 파이프라인은 운영 인프라 아키텍처와 별도로 관리하며, GitHub Actions와 GitLab CI/CD를 통해 소스 동기화, 컨테이너 이미지 빌드 및 배포를 수행합니다.
 
 ---
 
