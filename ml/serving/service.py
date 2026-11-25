@@ -1,3 +1,4 @@
+import logging
 import os
 import tempfile
 from contextlib import asynccontextmanager
@@ -29,8 +30,11 @@ FIXED_CROP = (1150, 670, 1750, 1070)
 # 기존 데이터처럼 이미 ROI crop이 적용된 이미지 크기
 CROPPED_SIZE = (600, 400)
 
+logger = logging.getLogger("uvicorn.error")
+
 model = None
 model_version = None
+model_run_id = None
 
 
 def determine_crop(
@@ -83,7 +87,7 @@ async def lifespan(app: FastAPI):
     서비스 시작 시 MLflow Registry에서 모델을 한 번만 로드하고,
     종료 시 참조를 해제합니다.
     """
-    global model, model_version
+    global model, model_version, model_run_id
 
     tracking_uri = os.environ["MLFLOW_TRACKING_URI"]
 
@@ -92,19 +96,26 @@ async def lifespan(app: FastAPI):
     )
 
     # Resolve alias once, then load the immutable Registry version.
-    model_version = str(
-        MlflowClient().get_model_version_by_alias(MODEL_NAME, MODEL_ALIAS).version
-    )
+    resolved = MlflowClient().get_model_version_by_alias(MODEL_NAME, MODEL_ALIAS)
+    model_version = str(resolved.version)
+    model_run_id = getattr(resolved, "run_id", None)
     model_uri = f"models:/{MODEL_NAME}/{model_version}"
 
     model = mlflow.pyfunc.load_model(
         model_uri
     )
 
+    # Record what was actually loaded; the alias may move later.
+    logger.info(
+        "Loaded model %s alias=%s version=%s run_id=%s",
+        MODEL_NAME, MODEL_ALIAS, model_version, model_run_id,
+    )
+
     yield
 
     model = None
     model_version = None
+    model_run_id = None
 
 
 app = FastAPI(
@@ -123,6 +134,7 @@ def get_health():
         "model_name": MODEL_NAME,
         "model_alias": MODEL_ALIAS,
         "model_version": model_version,
+        "model_run_id": model_run_id,
         "model_loaded": model is not None,
     }
 

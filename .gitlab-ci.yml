@@ -109,6 +109,10 @@ build_serving_image:
     - docker logout quay.io
 
   rules:
+    # Serving 버전 태그 Push 시 이미지 빌드
+    - if: '$CI_COMMIT_TAG =~ /^serving-v[0-9]+\.[0-9]+\.[0-9]+$/'
+
+    # main 브랜치에서 Serving 코드 변경 시 빌드
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:
         - ml/serving/**/*

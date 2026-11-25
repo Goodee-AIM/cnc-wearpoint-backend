@@ -14,6 +14,8 @@ from fastapi import (
     UploadFile,
 )
 
+import numpy as np
+import pandas as pd
 from PIL import Image
 
 from app.core.database import get_connection
@@ -116,6 +118,76 @@ def validate_image_dimensions(
     return width, height
 
 
+# Serving(ml/serving/preprocessing.py read_and_cut_sensor)의 간격 허용 오차입니다.
+# 간격(초)이 중앙값과 1ns 이내여야 합니다. Serving과 같은 float 계산을 쓰므로
+# 경계 사례(±1ns)까지 판정이 같습니다. 원본 MATWI 410개 파일은 나노초 기준
+# 편차가 0ns였습니다(2026-11-21 측정).
+SENSOR_INTERVAL_ATOL_SEC = 1e-9
+
+
+def validate_sensor_intervals(
+    timestamp_texts: list[str],
+) -> None:
+    """
+    Serving과 같은 방식으로 timestamp를 나노초 정밀도로 읽고
+    중복·역행·불규칙 간격을 거절합니다.
+
+    datetime.fromisoformat은 초 소수점 7번째 자리부터 버리므로,
+    616.312µs 같은 정상 주기가 616µs/617µs로 번갈아 보이는
+    정밀도 손실이 생깁니다. 이 함수는 그 손실 없이 비교합니다.
+    """
+    try:
+        timestamps = pd.to_datetime(
+            pd.Series(timestamp_texts),
+            format="mixed",
+            errors="coerce",
+        )
+    except (ValueError, TypeError, OverflowError):
+        raise ValueError(
+            "Sensor timestamp를 해석할 수 없습니다."
+        ) from None
+
+    # 시간대 오프셋이 행마다 다르면 datetime 열로 변환되지 않습니다.
+    if not pd.api.types.is_datetime64_any_dtype(timestamps):
+        raise ValueError(
+            "Sensor timestamp의 시간대 표기가 행마다 다릅니다."
+        )
+
+    if timestamps.isna().any():
+        row = int(np.flatnonzero(timestamps.isna().to_numpy())[0]) + 1
+        raise ValueError(
+            f"Sensor timestamp를 해석할 수 없습니다 ({row}번째 행)."
+        )
+
+    intervals_sec = (
+        timestamps.diff().dt.total_seconds().iloc[1:].to_numpy()
+    )
+
+    not_increasing = np.flatnonzero(~(intervals_sec > 0))
+    if intervals_sec.size == 0 or not_increasing.size:
+        row = int(not_increasing[0]) + 2 if not_increasing.size else 1
+        raise ValueError(
+            "Sensor timestamp가 중복되거나 "
+            f"시간순으로 정렬되어 있지 않습니다 ({row}번째 행)."
+        )
+
+    median_sec = float(np.median(intervals_sec))
+    irregular = np.flatnonzero(
+        ~np.isclose(
+            intervals_sec,
+            median_sec,
+            atol=SENSOR_INTERVAL_ATOL_SEC,
+            rtol=0,
+        )
+    )
+    if irregular.size:
+        row = int(irregular[0]) + 2
+        raise ValueError(
+            "Sensor timestamp 간격이 일정하지 않습니다 "
+            f"({row}번째 행, 기준 간격 {median_sec * 1e6:.3f}µs)."
+        )
+
+
 def validate_sensor_csv(
     data: bytes,
 ) -> tuple[int, datetime, datetime]:
@@ -144,7 +216,7 @@ def validate_sensor_csv(
         first_timestamp = None
         previous_timestamp = None
         last_timestamp = None
-        expected_interval = None
+        timestamp_texts = []
 
         for cells in reader:
             if not cells:
@@ -197,31 +269,16 @@ def validate_sensor_csv(
 
             if previous_timestamp is not None:
                 try:
-                    interval = (
-                        current_timestamp
-                        - previous_timestamp
-                    )
+                    current_timestamp - previous_timestamp
                 except TypeError:
                     raise ValueError(
                         "Sensor timestamp의 시간대 표기가 "
                         "행마다 다릅니다."
                     ) from None
 
-                # Serving은 중복·역행 timestamp를 거절합니다.
-                if interval.total_seconds() <= 0:
-                    raise ValueError(
-                        "Sensor timestamp가 중복되거나 "
-                        "시간순으로 정렬되어 있지 않습니다."
-                    )
-
-                # Serving은 파일 내 샘플링 간격이 일정해야 합니다.
-                if expected_interval is None:
-                    expected_interval = interval
-                elif interval != expected_interval:
-                    raise ValueError(
-                        "Sensor timestamp 간격이 일정하지 않습니다 "
-                        f"({row_count + 1}번째 행)."
-                    )
+            # 간격 검사는 datetime(마이크로초 정밀도)이 아니라
+            # 원문 문자열을 나노초로 다시 읽어 수행합니다.
+            timestamp_texts.append(cells[5].strip())
 
             if first_timestamp is None:
                 first_timestamp = (
@@ -247,6 +304,8 @@ def validate_sensor_csv(
                 f"Sensor CSV에는 최소 {MIN_SENSOR_ROWS}개 이상의 "
                 f"데이터 행이 필요합니다 (현재 {row_count}행)."
             )
+
+        validate_sensor_intervals(timestamp_texts)
 
         return (
             row_count,

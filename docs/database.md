@@ -1,8 +1,9 @@
 # CNC WearPoint — 데이터베이스 구성 및 이전 가이드
 
-> **문서 상태:** RDS 이전 완료 / TLS·CA 검증 완료 / Object Storage 이전 완료 / MLflow Lifecycle 검증 완료  
-> **기준일:** 2026-11-13  
-> **대상:** CNC WearPoint 서비스 DB, MLflow 메타데이터 DB 및 MLflow 인증 DB
+> **문서 상태:** RDS 이전 완료 / TLS·CA 검증 완료 / Object Storage 이전 완료 / 실제 모델 Registry 등록 및 Model Serving 연동 운영 중  
+> **기준일:** 2026-11-20  
+> **대상:** CNC WearPoint 서비스 DB, MLflow 메타데이터 DB 및 MLflow 인증 DB  
+> **관련 문서:** [README](../README.md) · [모델 생명주기 현재 상태](model-lifecycle/MODEL_LIFECYCLE_CURRENT_STATE.md) · [승격·롤백 Runbook](model-lifecycle/MODEL_PROMOTION_ROLLBACK_RUNBOOK.md)
 
 ---
 
@@ -146,23 +147,52 @@ Database를 목적에 따라 분리함으로써 다음과 같은 장점을 얻�
 
 | 테이블 | 역할 |
 |---|---|
-| `tool_sets` | 가공 조건 및 Set 정보 |
-| `measurements` | 이미지·센서 측정 데이터 및 파일 경로 관리 |
+| `tool_sets` | 가공 조건 및 Set 정보 (PK `set_id`, 원본 Set 번호 `set_number` 4~11) |
+| `measurements` | 이미지·센서 측정 데이터, 파일 경로(Object Key), 처리 상태 및 예측 Claim 정보 |
 | `wear_labels` | 실제 공구 마모량 및 마모 유형 |
-| `predictions` | AI 모델의 예측 결과 |
-| `alerts` | Warning / Danger 알림 및 이력 |
+| `predictions` | AI 모델의 예측 결과 (`model_name`, `model_version` 포함) |
+| `alerts` | 예측 기반 Warning / Danger 알림 및 상세 확인 이력 |
+| `monitoring_state` | 공통 모니터링 재생 시계 (Singleton 1행, `playback_generation` 포함) |
+| `monitoring_items` | 공통 재생 목록 (Set별 재생 순서와 재생 시간) |
+| `monitoring_alert_events` | 공통 재생 알림 발생 이력 (세션·재시작·회차·Set·위치 단위) |
+| `monitoring_inference_runs` | 공통 재생 회차별 Serving 추론 실행 상태와 결과 |
+| `monitoring_playback_gates` | Set별 재생 Gate (센서 재생 → 추론 결과 대기 → 3초 표시) |
 
-서비스 DB의 기준 Schema는 다음 파일에서 관리합니다.
+공통 모니터링과 알림의 동작은 [공통 모니터링](monitoring.md)과 [공통 알림](monitoring-alerts.md) 문서를 참고합니다.
 
-```text
-sql/cnc/schema.sql
-```
+### 4.1 주요 Column
 
-해당 파일에는 Table, Column, Constraint, Foreign Key 등의 Database 구조를 정의합니다.
+| 테이블 | Column | 설명 |
+|---|---|---|
+| `measurements` | `status` | `waiting_input` / `ready` / `predicting` / `completed` / `failed` |
+| `measurements` | `source_type` | `dataset`(기존 MATWI 데이터) / `upload`(사용자 업로드). 업로드 행은 `set_id`가 NULL일 수 있음 |
+| `measurements` | `input_issue_reason` | 이미지 또는 센서 입력 누락·미등록 사유 |
+| `measurements` | `prediction_claim_id`, `prediction_started_at` | 진행 중인 예측 시도의 Claim ID(Fencing Token)와 Claim 시각. 중복 예측 방지 및 운영자 복구([scripts/recover_stale_prediction.py](../scripts/recover_stale_prediction.py))에 사용 |
+| `predictions` | `model_name`, `model_version` | Serving 응답의 모델 이름과 MLflow Registry Version 번호(예: `1`, `2`). Alias, Run ID, Serving 이미지 정보는 저장하지 않음 |
+| `predictions` | `warning_threshold_um`, `danger_threshold_um`, `status` | 예측 당시 판정 기준과 결과. Schema 기본값은 50 / 90이지만 Backend는 현재 기준인 150 / 200 µm([app/core/wear_policy.py](../app/core/wear_policy.py))을 명시적으로 저장 |
+| `monitoring_inference_runs` | `status` | `queued` / `running` / `completed` / `failed` / `cancelled`. `completed`이면 예측값·판정·`model_name`·`model_version`이 CHECK 제약으로 필수 |
+| `monitoring_inference_runs` | `error_code` | `INPUT_REJECTED`(Serving 입력 거절), `INFERENCE_FAILED`(그 밖의 추론 실패), `WORKER_INTERRUPTED`(Worker 중단 후 정리), `STALE_OCCURRENCE`(재생 위치가 바뀌어 더 이상 유효하지 않은 실행) |
+
+모니터링 추론 결과는 `predictions`가 아니라 `monitoring_inference_runs`에 저장합니다. 같은 Measurement도 재생 회차·재시작마다 다시 추론할 수 있기 때문입니다.
+
+데모 Script(`import_predictions.py`)로 등록한 예측 행은 `model_name='rf-csv-demo'`, `model_version='rf-csv-demo-v1'`이므로 MLflow Registry Version 기준 집계에서는 제외합니다.
+
+### 4.2 Schema 및 Migration 파일
+
+서비스 DB 구조는 다음 파일에서 관리합니다.
+
+| 파일 | 역할 |
+|---|---|
+| [sql/cnc/schema.sql](../sql/cnc/schema.sql) | 신규 DB 초기화용 기준 Schema. 기본 5개 테이블과 모니터링 테이블(`monitoring_*`)을 정의 |
+| [sql/cnc/migrations](../sql/cnc/migrations) | 기존 DB에 적용하는 공통 모니터링·알림·모니터링 추론·재생 Gate Migration (2026-11-11, 2026-11-19) |
+| [migrations](../migrations) | 기존 DB에 적용하는 사용자 업로드(`source_type`, `input_issue_reason`, `set_id` NULL 허용)와 예측 Claim 복구(`prediction_claim_id`, `prediction_started_at`) Migration (2026-11-17, 2026-11-18) |
+| [sql/schema.sql](../sql/schema.sql) | 2026-11-05 초기 Baseline. 현재 Column 이름(`tool_sets.set_id`, `image_id` 등)과 다르므로 기준 Schema로 사용하지 않음 |
 
 기존 Database가 이미 생성된 경우 `schema.sql`을 수정한다고 해서 운영 Database 구조가 자동으로 변경되지는 않습니다.
 
-운영 단계의 Schema 변경은 별도의 Migration 절차를 통해 관리해야 합니다.
+운영 단계의 Schema 변경은 Migration SQL을 명시적으로 적용하는 방식으로 관리합니다. Migration 자동 실행 도구는 사용하지 않습니다.
+
+> **주의 (2026-11-20 기준):** `sql/cnc/schema.sql`과 `sql/schema.sql`에는 루트 `migrations/`에서 추가한 `measurements.source_type`, `input_issue_reason`, `prediction_claim_id`, `prediction_started_at` Column과 `set_id` NULL 허용 변경이 반영되어 있지 않습니다. 현재 Backend는 이 Column을 사용하므로, `sql/cnc/schema.sql`로 신규 DB를 만든 경우 루트 `migrations/`의 SQL을 날짜 순서대로 추가 적용해야 합니다.
 
 ---
 
@@ -204,6 +234,8 @@ GET /api/sets/4/measurements
 ```
 
 따라서 현재 CNC WearPoint 서비스 Database는 RDS에서 정상적으로 사용되고 있습니다.
+
+> 위 Row Count는 2026-11-13 RDS 이전 시점의 기록입니다. 이후 Model Serving 연동과 공통 모니터링 추론을 운영하면서 `predictions`, `alerts`, `monitoring_*` 테이블에 데이터가 계속 누적되고 있으며, 사용자 업로드(`source_type='upload'`)로 `measurements` 행도 추가됩니다.
 
 ---
 
@@ -262,6 +294,19 @@ Object Storage 이전 결과:
 
 Object Storage 업로드 후 Object Count와 전체 Byte Size를 비교하여 업로드 결과를 확인했습니다.
 
+### 6.1 사용자 업로드 파일
+
+`POST /api/measurements`(및 `/api/measurements/auto-predict`)로 업로드한 이미지와 센서 CSV는 같은 Bucket의 다음 Prefix에 저장하고, `source_type='upload'`인 Measurement를 생성합니다.
+
+```text
+images/uploads/upload-<UUID>/
+sensors/uploads/upload-<UUID>/
+```
+
+DB 저장에 실패하면 이미 저장한 파일을 삭제합니다. 업로드 검증 기준은 [README 3.2](../README.md#32-측정-데이터-업로드-및-입력-검증)를 참고합니다.
+
+사용자 입력 탭(`/api/manual-inputs`)의 파일은 DB와 Object Storage가 아니라 Backend의 `MANUAL_INPUT_ROOT` 디렉터리(Compose 예시: `cnc_manual_inputs` Volume)에 저장합니다. 자세한 내용은 [사용자 입력](manual-inputs.md) 문서를 참고합니다.
+
 ---
 
 ## 7. measurements 파일 경로 Migration
@@ -307,6 +352,8 @@ Database에서 이미지 경로가 존재하지만 실제 Object Storage에는 �
 
 현재는 기존 Path를 유지하고 있습니다.
 
+2026-11-17 Migration으로 추가한 `input_issue_reason`은 Path 자체가 비어 있는 입력 누락(`이미지 파일 미등록` 등)만 기록하며, Path가 남아 있는 품질 제외 이미지 9건은 표현하지 않습니다.
+
 향후 다음과 같은 상태 Column을 추가하는 방안을 검토합니다.
 
 ```text
@@ -335,8 +382,12 @@ Backend는 S3 Compatible API를 사용해 Object Storage에 접근합니다.
 
 ```text
 STORAGE_BACKEND=s3
+OBJECT_STORAGE_ENDPOINT=<NHN Cloud S3 호환 Endpoint>
+OBJECT_STORAGE_REGION=KR1
 OBJECT_STORAGE_BUCKET=cnc-wearpoint-data
 ```
+
+`STORAGE_BACKEND`의 기본값은 `local`이며([app/services/storage.py](../app/services/storage.py)), 로컬 개발에서는 `LOCAL_STORAGE_ROOT` 디렉터리를 사용합니다.
 
 Object Storage 관련 Credential은 Git Repository에 저장하지 않고 별도의 Environment File을 통해 관리합니다.
 
@@ -542,6 +593,8 @@ mlflow-artifacts/
 
 MLflow Server는 S3 Compatible API를 이용해 Object Storage를 Artifact Store로 사용합니다.
 
+Artifact는 MLflow Server의 Artifact Proxy를 통해 업로드·다운로드합니다(Registry 모델 Version의 `artifact_path`가 `mlflow-artifacts:/...` 형식). 따라서 Model Serving Container는 Object Storage에 직접 접근하지 않고 MLflow Server를 통해 모델 Artifact를 내려받으며, Object Storage 장애는 Serving 기동 시 "MLflow Artifact 다운로드 실패"로 나타납니다.
+
 ---
 
 ## 17. MLflow Object Storage E2E 검증
@@ -568,7 +621,9 @@ cnc-wearpoint-object-storage-test
 
 ---
 
-## 18. MLflow Model Lifecycle 검증
+## 18. MLflow Model Lifecycle 검증 (2026-11-13, 과거 기록)
+
+> 이 절은 실제 모델 등록 이전에 수행한 **과거 검증 기록**입니다. 검증에 사용한 임시 Regression Model은 이후 삭제했으며, 현재 운영 Serving은 `champion` Alias를 사용하지 않습니다. 현재 모델 구성은 [19절](#19-실제-모델-registry-등록-및-serving-연동)을 참고합니다.
 
 실제 최종 CNC 모델이 아직 확정되지 않은 상태에서 MLflow Registry와 운영 Lifecycle을 검증하기 위해 임시 Regression Model을 사용했습니다.
 
@@ -619,41 +674,50 @@ V1 Load 확인
 - Rollback
 - Registry 기반 Model Load
 
-현재 해당 모델은 Lifecycle 검증용 임시 모델이며 실제 CNC WearPoint 서비스 모델은 아닙니다.
+해당 모델은 Lifecycle 검증용 임시 모델이었으며 실제 CNC WearPoint 서비스 모델이 아닙니다. 이 검증은 "Registry Alias 이동과 Version별 Load가 동작한다"는 근거이며, 현재 Model Serving 경로(기동 시 Alias 해석, Container 재생성, Backend 저장)를 검증한 것은 아닙니다.
 
 ---
 
-## 19. 실제 모델 적용 예정
+## 19. 실제 모델 Registry 등록 및 Serving 연동
 
-실제 CNC WearPoint 최종 모델이 확정되면 다음 절차를 수행합니다.
+실제 CNC WearPoint 모델은 MLflow Model Registry에 `cnc-wearpoint-multitask`로 등록되어 있습니다.
 
-```text
-최종 모델 학습
-        ↓
-MLflow Experiment / Run 기록
-        ↓
-Model Artifact 저장
-        ↓
-Model Registry 등록
-        ↓
-Model Version 생성
-        ↓
-검증 완료
-        ↓
-champion Alias 지정
-        ↓
-FastAPI Model Load
-        ↓
-Inference 검증
-```
+| Version | Alias | 설명 |
+|---|---|---|
+| 1 | `candidate` | 최초 등록 모델 |
+| 2 | `candidate-opt` | Version 1과 같은 Checkpoint에 추론 최적화(ResNet18 이미지 특징을 요청당 1회만 계산)를 적용한 모델 |
 
-FastAPI에서는 향후 다음 형태의 Registry URI를 이용하는 방식을 적용할 수 있습니다.
+두 Version 모두 `python_function` Flavor와 동일한 입출력 Signature를 사용합니다. Run / Logged Model에 평가 지표는 기록되어 있지 않습니다.
+
+현재 운영 흐름은 다음과 같습니다.
 
 ```text
-models:/<model-name>@champion
+MLflow Model Registry (RDS mlflow + Object Storage Artifact)
+        │  Serving 기동 시 1회: MODEL_ALIAS → Version 해석
+        │  이후 models:/cnc-wearpoint-multitask/<version> Load
+        ▼
+Model Serving Container (ml/serving, 127.0.0.1:8001)
+        │  POST /predictions
+        ▼
+FastAPI Backend
+        │  model_name, model_version 검증 후 저장
+        ▼
+RDS cnc_wearpoint
+        ├── predictions (+ alerts)       ← 수동 예측 / 자동 예측 / 재추론
+        └── monitoring_inference_runs    ← 공통 모니터링 추론
 ```
 
-초기 운영 단계에서는 Champion 변경 후 FastAPI 재시작 또는 명시적인 Model Reload 절차를 통해 새 Model을 반영할 예정입니다.
+- Serving은 `MODEL_NAME`과 `MODEL_ALIAS` 환경변수로 모델을 선택하며, **Alias는 Container 기동 시 한 번만 Version으로 해석**합니다. 실행 중에는 Alias를 다시 조회하지 않고 Reload API도 없습니다.
+- 따라서 Registry Alias를 옮기거나 `MODEL_ALIAS`를 바꾸면 운영 VM에서 Serving Container를 재생성해야 반영됩니다(`sudo docker compose up -d --force-recreate --pull never serving`). `docker restart`로는 환경변수 변경이 반영되지 않습니다.
+- Serving은 MLflow에 공개 URL(`https://aimw.duckdns.org/mlflow/`)로 접속하며, 기동 시 MLflow 접속이나 모델 Load에 실패하면 Fallback 없이 기동이 실패합니다.
+- 2026-11-20부터 운영 Serving은 `MODEL_ALIAS=candidate-opt`(Version 2)를 사용합니다. Registry Alias는 변경하지 않았고(`candidate` → 1 유지), 전환 후 운영 모니터링 추론 시간은 평균 약 5.2초에서 약 1.1초로 줄었습니다.
+- 저장된 예측이 어느 Registry Version으로 만들어졌는지는 `model_version`으로 추적할 수 있지만, 어떤 Alias로 서빙되었는지와 Alias 변경 이력은 앱 DB와 MLflow DB(`registered_model_aliases`는 현재 매핑만 저장) 어디에도 남지 않습니다.
+
+Serving 운영 방법과 모델 전환·롤백 절차는 다음 문서를 기준으로 합니다.
+
+- [README 8.8 Model Serving 운영](../README.md#88-model-serving-운영)
+- [모델 생명주기 현재 상태](model-lifecycle/MODEL_LIFECYCLE_CURRENT_STATE.md)
+- [모델 승격·롤백 Runbook](model-lifecycle/MODEL_PROMOTION_ROLLBACK_RUNBOOK.md)
 
 ---
 
@@ -717,15 +781,24 @@ cnc-wearpoint-backend/
 │   │       ├── cnc_wp_infrastructure.png
 │   │       └── cnc_wp_infrastructure.svg
 │   │
-│   └── deployment/
-│       └── infrastructure.md
+│   ├── deployment/
+│   │   └── infrastructure.md
+│   │
+│   └── model-lifecycle/
+│       └── 모델 생명주기 현재 상태 / 테스트 계획 / Runbook / 검증 보고서
 │
 ├── infra/
 │   └── compose/
 │
+├── migrations/
+│   ├── 20261117_measurements_upload_support.sql
+│   └── 20261118_prediction_claim_recovery.sql
+│
 └── sql/
+    ├── schema.sql              # 초기 Baseline (현재 기준 아님)
     ├── cnc/
-    │   └── schema.sql
+    │   ├── schema.sql          # 신규 DB 초기화 기준 Schema
+    │   └── migrations/         # 모니터링·알림·추론 Migration
     │
     └── mlflow/
         └── mlflow.sql
@@ -739,6 +812,7 @@ cnc-wearpoint-backend/
 | `docs/infrastructure.md` | NHN Cloud Network 및 Infrastructure |
 | `docs/database.md` | 서비스 DB / MLflow DB / Storage Migration |
 | `docs/deployment/infrastructure.md` | 배포 및 Docker Compose 구성 |
+| `docs/model-lifecycle/` | MLflow Registry → Serving → Backend → RDS 모델 생명주기 및 승격·롤백 절차 |
 
 ---
 
@@ -779,10 +853,16 @@ App VM에서는 목적에 따라 Environment File을 분리하여 관리합니�
 /etc/cnc-wearpoint/
 ├── backend.env
 ├── monitoring.env
-└── object-storage.env
+├── object-storage.env
+└── inference.env        # Model Serving용 (MODEL_NAME, MODEL_ALIAS, MLFLOW_TRACKING_URI, MLflow 자격증명)
+
+/etc/mlflow/
+└── mlflow.env           # MLflow Tracking Server용
 ```
 
-파일 접근 권한은 배포에 필요한 계정만 읽을 수 있도록 제한합니다.
+파일 접근 권한은 배포에 필요한 계정만 읽을 수 있도록 제한합니다. GitLab Runner는 배포 전용 Group을 통해 Backend 배포에 필요한 env 파일만 읽을 수 있습니다.
+
+`inference.env`는 root만 읽을 수 있으므로 Serving Container를 재생성할 때는 `sudo docker compose`로 실행합니다.
 
 Object Storage Credential 역시 환경변수로 주입하며 Source Code에 직접 작성하지 않습니다.
 
@@ -868,14 +948,22 @@ FastAPI
    │       ↓
    │   RDS MySQL
    │   cnc_wearpoint
+   │   (predictions / alerts / monitoring_inference_runs 저장)
    │
-   └── HTTPS / S3 API
+   ├── HTTPS / S3 API
+   │       ↓
+   │   Object Storage
+   │   cnc-wearpoint-data
+   │   ├── images
+   │   └── sensors
+   │
+   └── Docker Network (POST /predictions)
            ↓
-       Object Storage
-       cnc-wearpoint-data
-       ├── images
-       └── sensors
+       Model Serving Container
+       cnc-wearpoint-serving:8001
 ```
+
+FastAPI가 Object Storage에서 이미지·센서 파일을 읽어 Serving에 전달하고, Serving 응답을 검증한 뒤 RDS에 저장합니다. Serving은 RDS에 직접 접근하지 않습니다.
 
 ### MLflow
 
@@ -901,6 +989,8 @@ User / Model Developer
           Object Storage
           cnc-wearpoint-mlflow
 ```
+
+Model Serving Container도 기동 시 같은 경로(`https://aimw.duckdns.org/mlflow/`)로 MLflow에 접속해 Registry Alias를 Version으로 해석하고, Artifact Proxy를 통해 모델 Artifact를 내려받습니다.
 
 ---
 
@@ -936,13 +1026,18 @@ NHN Cloud
 │
 ├── FastAPI
 │   ├── RDS 연결 완료
-│   └── Object Storage 파일 조회 완료
+│   ├── Object Storage 파일 조회·업로드 완료
+│   └── Serving 예측 결과 저장 (predictions / alerts / monitoring_inference_runs)
+│
+├── Model Serving Container
+│   └── cnc-wearpoint-multitask Version 2 (MODEL_ALIAS=candidate-opt)
 │
 └── MLflow
     ├── RDS Backend Store 전환 완료
     ├── Basic Auth DB 분리
     ├── Artifact Store 전환 완료
-    └── Registry / Alias / Rollback 검증 완료
+    ├── Registry / Alias / Rollback 검증 완료 (2026-11-13 임시 모델)
+    └── 실제 모델 cnc-wearpoint-multitask 등록 (Version 1, 2)
 ```
 
 현재 상태는 다음과 같이 정리할 수 있습니다.
@@ -953,29 +1048,22 @@ TLS_CA_VERIFIED
 OBJECT_STORAGE_MIGRATION_COMPLETE
 MLFLOW_ARTIFACT_STORE_VERIFIED
 MLFLOW_LIFECYCLE_VERIFIED
+MODEL_REGISTRY_SERVING_CONNECTED
 ```
 
 서비스 Database Migration과 Object Storage 전환은 완료되었습니다.
 
-MLflow 역시 RDS Backend Store 및 Object Storage Artifact Store 기반으로 동작하며, Model Registry의 Version 및 Alias 전환과 Rollback 동작까지 검증했습니다.
-
-현재 남은 핵심 작업은 **실제 CNC WearPoint 최종 모델을 MLflow Registry에 등록하고 FastAPI가 해당 모델을 불러와 실제 Inference를 수행하도록 연결하는 것**입니다.
+MLflow 역시 RDS Backend Store 및 Object Storage Artifact Store 기반으로 동작하며, 실제 모델 `cnc-wearpoint-multitask`를 Registry에 등록해 Model Serving Container와 Backend Prediction API를 연동했습니다. 예측 결과는 `model_name`, `model_version`과 함께 RDS에 저장합니다.
 
 ---
 
 ## 28. 향후 작업
 
-### 실제 모델 적용
+### 모델 운영
 
-- 최종 회귀 모델 확정
-- 실제 Training Run MLflow 기록
-- Parameter / Metric 기록
-- Model Artifact 저장
-- Registry 등록
-- Model Version 관리
-- `champion` Alias 지정
-- FastAPI Registry Model Load
-- 실제 `/predict` Inference 검증
+- Registry 모델 Version의 평가 지표 기록 (현재 Version 1·2 모두 Run Metric 없음)
+- 모델 승격·롤백 절차의 운영 단계별 검증 ([테스트 계획](model-lifecycle/MODEL_LIFECYCLE_TEST_PLAN.md))
+- 예측 결과에 Serving Alias 등 추가 감사 정보 저장 검토 (현재 `model_name`, `model_version`만 저장)
 
 ### 데이터 품질 관리
 
@@ -988,6 +1076,7 @@ MLflow 역시 RDS Backend Store 및 Object Storage Artifact Store 기반으로 �
 
 - RDS Backup / Restore 절차 검증
 - Schema Migration 관리 방식 정립
+- `sql/cnc/schema.sql`에 루트 `migrations/`의 업로드·예측 Claim Column 반영, 초기 Baseline `sql/schema.sql` 정리
 - 필요한 Index 성능 점검
 - 운영 Query 성능 확인
 
@@ -1012,6 +1101,7 @@ Measurement Metadata
 Wear Label
 Prediction
 Alert
+Monitoring 재생 상태 / 알림 / 추론 실행 기록
 MLflow Metadata
 Authentication Metadata
 ```
@@ -1055,4 +1145,4 @@ RDS 연결은 TLS 1.3 및 CA 인증서 검증을 적용했고, FastAPI와 MLflow
 
 서비스 파일 역시 로컬 Storage 의존성을 제거하고 Object Storage에서 직접 조회하도록 전환했습니다.
 
-따라서 현재 Database 및 Storage Infrastructure는 실제 CNC WearPoint 모델이 확정된 이후 **MLflow Registry → FastAPI Model Serving**을 연결할 수 있는 기반까지 구성된 상태입니다.
+이 기반 위에서 실제 모델 `cnc-wearpoint-multitask`를 MLflow Registry에 등록하고, **MLflow Registry → Model Serving Container → FastAPI → RDS** 경로로 예측 결과를 저장하도록 연결했습니다. 현재 운영 Serving은 Version 2(`candidate-opt`)를 사용합니다.

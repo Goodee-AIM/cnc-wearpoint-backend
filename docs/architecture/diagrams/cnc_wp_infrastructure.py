@@ -200,6 +200,14 @@ with Diagram(
                         "127.0.0.1:8000"
                     )
 
+                    # Separate Compose project, run manually (no CI deploy job).
+                    serving = Docker(
+                        "Model Serving\n"
+                        "cnc-wearpoint-serving\n"
+                        "PyTorch CPU\n"
+                        "127.0.0.1:8001"
+                    )
+
                     mlflow = Mlflow(
                         "MLflow 3.18.0\n"
                         "systemd / venv\n"
@@ -300,6 +308,21 @@ with Diagram(
 
     nginx >> Edge(
         label="/mlflow/"
+    ) >> mlflow
+
+    # ========================================================
+    # Model Serving
+    # Serving is not routed by Nginx; only Backend calls it.
+    # ========================================================
+
+    backend >> Edge(
+        label="POST /predictions\nDocker network",
+        color="#6b46c1",
+    ) >> serving
+
+    serving >> Edge(
+        label="Model load at startup\nvia https://aimw.duckdns.org/mlflow/",
+        color="#6b46c1",
     ) >> mlflow
 
     # ========================================================

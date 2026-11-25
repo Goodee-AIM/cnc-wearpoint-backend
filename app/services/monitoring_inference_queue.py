@@ -276,6 +276,7 @@ def _serving_gate():
                 cursor = connection.cursor(dictionary=True)
                 try:
                     cursor.execute("SELECT RELEASE_LOCK(%s)", ("cnc_wp_monitoring_queue",))
+                    cursor.fetchone()  # Drain the SELECT result before closing the cursor.
                 finally:
                     cursor.close()
             except Exception:

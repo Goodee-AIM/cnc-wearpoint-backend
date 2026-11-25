@@ -4,14 +4,17 @@
 
 이 문서는 CNC WearPoint 프로젝트의 **NHN Cloud 인프라 구성과 주요 네트워크 통신 구조**를 정리한 문서입니다.
 
-현재 운영 중인 App VM과 RDS를 중심으로 VPC, Subnet, Route Table, Security Group, Floating IP, Nginx Reverse Proxy, Object Storage 등의 구조와 각 자원의 역할을 설명합니다.
+현재 운영 중인 App VM과 RDS를 중심으로 VPC, Subnet, Route Table, Security Group, Floating IP, Nginx Reverse Proxy, Model Serving Container, Object Storage 등의 구조와 각 자원의 역할을 설명합니다.
+
+> **기준일:** 2026-11-20  
+> 운영 환경은 Kubernetes가 아닌 **단일 App VM의 Docker / Docker Compose** 기반입니다. Kubernetes(NKS)는 사용하지 않으며, 저장소에도 Kubernetes Manifest는 없습니다.
 
 CNC WearPoint 인프라는 다음 설계 원칙을 기준으로 구성했습니다.
 
 - Application과 Database 영역을 서로 다른 Subnet으로 분리
 - RDS는 외부 인터넷에 직접 노출하지 않음
 - 외부 서비스 요청은 HTTPS 단일 진입점을 통해 처리
-- Frontend, Backend, MLflow는 App VM 내부에서 역할별로 분리
+- Frontend, Backend, Model Serving, MLflow는 App VM 내부에서 역할별로 분리
 - 구조화 데이터는 RDS에 저장
 - 이미지, Sensor 데이터, MLflow Artifact는 Object Storage에 저장
 - RDS 연결은 TLS 및 CA 인증서 검증 적용
@@ -31,6 +34,8 @@ CNC WearPoint 인프라는 다음 설계 원칙을 기준으로 구성했습니�
 구성도는 Python `Diagrams`와 Graphviz를 사용해 코드로 관리합니다.
 
 인프라 구성이 변경되면 동일한 Python 코드에서 PNG와 SVG를 다시 생성할 수 있도록 구성했습니다.
+
+> 구성도 생성 코드에는 Model Serving Container를 반영했지만, 현재 PNG / SVG 이미지는 Serving 추가 이전(2026-11-14)에 생성한 것이므로 Serving Container가 표시되지 않습니다. 이미지를 다시 생성하기 전까지는 [7절](#7-app-vm-내부-서비스-구성)의 서비스 구성을 기준으로 합니다.
 
 ---
 
@@ -123,7 +128,7 @@ cnc-wp-vpc
 
 Application과 Database를 서로 다른 Subnet에 배치해 네트워크 역할과 접근 정책을 분리했습니다.
 
-VPC는 현재 사용량보다 여유 있는 `/20` 대역으로 구성하여 향후 Monitoring, Management, NKS Worker 등의 추가 Subnet을 구성할 수 있는 주소 공간을 확보했습니다.
+VPC는 현재 사용량보다 여유 있는 `/20` 대역으로 구성하여 향후 Monitoring, Management 등의 추가 Subnet을 구성할 수 있는 주소 공간을 확보했습니다. NKS(Kubernetes) Worker Subnet은 현재 사용하지 않으며, 필요성이 확인될 경우에만 검토하는 향후 확장 항목입니다.
 
 ---
 
@@ -146,8 +151,9 @@ App VM은 다음 역할을 담당합니다.
 - Host Nginx
 - Frontend Container
 - Backend Container
+- Model Serving Container
 - MLflow Tracking Server
-- GitLab Runner
+- GitLab Runner (`cnc-wp-runner`)
 - Docker Compose 기반 배포
 - RDS 접근
 - Object Storage 접근
@@ -196,16 +202,56 @@ cnc-wp-app-01
 ├── Frontend Container
 │   └── 127.0.0.1:8080
 │
-├── Backend Container
+├── Backend Container (cnc-wearpoint-backend)
 │   └── 127.0.0.1:8000
+│
+├── Model Serving Container (cnc-wearpoint-serving)
+│   └── 127.0.0.1:8001
 │
 └── MLflow
     └── 127.0.0.1:5000
 ```
 
-Frontend와 Backend는 Docker Container로 운영합니다.
+Frontend, Backend, Model Serving은 Docker Container로 운영합니다.
 
 MLflow는 현재 Docker Image로 운영하지 않고 Python Virtual Environment와 systemd를 사용합니다.
+
+### 7.1 Container 실행 정의와 배포 방식
+
+| 구성요소 | 이미지 | 실행 정의 | 배포 방식 |
+|---|---|---|---|
+| Backend | `quay.io/melona240/cnc-wearpoint-backend:vX.Y.Z` (2026-11-20 기준 `v0.1.12`) | `/opt/cnc-wearpoint/backend` (저장소 밖) | GitLab CI `deploy_backend`가 `vX.Y.Z` Tag Push 시 자동 배포 |
+| Model Serving | `quay.io/melona240/cnc-wearpoint-serving` | `/opt/cnc-wearpoint/serving/compose.yaml` (저장소 밖, 별도 Compose Project) | CI는 이미지 Build·승격만 수행, Container 교체·재생성은 운영 VM에서 수동 |
+| Frontend | `quay.io/melona240/cnc-wearpoint-frontend` | 운영 VM (이 저장소 범위 밖) | 이 저장소에서 관리하지 않음 |
+| MLflow | - | systemd 서비스, `/etc/mlflow/mlflow.env` | 수동 운영 |
+
+Backend 배포(`deploy_backend`)는 `/opt/cnc-wearpoint/backend` Compose Project에서만 `docker compose up -d --no-build --remove-orphans`를 실행하므로, 별도 Project인 Serving Container를 재생성하거나 제거하지 않습니다. CI/CD 구성은 [README 9. 백엔드 CI/CD](../README.md#9-백엔드-cicd)를 참고합니다.
+
+### 7.2 Model Serving Container
+
+Model Serving([ml/serving](../ml/serving))은 MLflow Model Registry의 `cnc-wearpoint-multitask` 모델로 추론하는 FastAPI + PyTorch CPU Container입니다.
+
+| 항목 | 구성 |
+|---|---|
+| Container | `cnc-wearpoint-serving` |
+| Port | `127.0.0.1:8001` (Host Loopback에만 바인딩, Nginx로 외부 공개하지 않음) |
+| Docker Network | 외부 Network `compose_default` (Backend Container와 공유) |
+| API | `GET /health`, `POST /predictions` |
+| env 파일 | `/etc/cnc-wearpoint/inference.env` (root 전용, `MODEL_NAME`, `MODEL_ALIAS`, `MLFLOW_TRACKING_URI`, MLflow 자격증명) |
+| 현재 모델 | `MODEL_ALIAS=candidate-opt` → Version 2 (2026-11-20 전환) |
+| MLflow 접속 | 공개 URL `https://aimw.duckdns.org/mlflow/` (Nginx / TLS 경유) |
+
+Backend는 Docker Network에서 `SERVING_URL`(기본 `http://cnc-wearpoint-serving:8001`)로 Serving의 `POST /predictions`를 호출합니다.
+
+Serving은 기동 시 한 번만 `MODEL_ALIAS`를 Registry Version으로 해석해 모델을 Load하며, Reload API는 없습니다. 모델을 바꾸려면 env 파일을 수정한 뒤 Container를 재생성합니다. env 파일은 root만 읽을 수 있으므로 `sudo`로 실행하며, `docker restart`로는 환경변수 변경이 반영되지 않습니다.
+
+```bash
+cd /opt/cnc-wearpoint/serving
+sudo docker compose up -d --force-recreate --pull never serving
+curl -s http://127.0.0.1:8001/health
+```
+
+Serving은 기동 시 공개 URL을 통해 MLflow에 접속하므로, Nginx·인증서·DNS 또는 MLflow / Object Storage 장애가 있으면 Serving 재시작이 실패합니다(Fallback 없음). 모델 전환·롤백 절차는 [모델 승격·롤백 Runbook](model-lifecycle/MODEL_PROMOTION_ROLLBACK_RUNBOOK.md)을 따릅니다.
 
 ---
 
@@ -239,6 +285,8 @@ https://aimw.duckdns.org
 ```
 
 이 구조를 통해 Frontend, Backend, MLflow의 내부 Port를 외부에 직접 공개하지 않고 Nginx를 통해 통합적으로 관리합니다.
+
+Model Serving(`127.0.0.1:8001`)은 Nginx Routing 대상이 아니며 외부에 공개하지 않습니다. Serving은 Backend Container에서 Docker Network로만 호출합니다.
 
 ---
 
@@ -291,10 +339,11 @@ VPC 내부 자원과의 통신은 `local` 경로를 사용합니다.
 App VM에서 필요한 외부 통신 예시는 다음과 같습니다.
 
 - Package Download
-- Container Image Pull
-- Git Repository 접근
+- Container Image Pull (Quay.io)
+- Git Repository 접근 (GitLab Runner)
 - Object Storage API
 - Let's Encrypt 인증서 갱신
+- Model Serving의 MLflow 접속 (공개 URL `https://aimw.duckdns.org/mlflow/`를 통해 같은 VM의 Nginx로 다시 진입)
 
 ---
 
@@ -588,6 +637,8 @@ cnc-wearpoint-mlflow
 
 MLflow Metadata는 RDS에 저장하고 실제 Artifact 파일은 Object Storage에 저장하도록 역할을 분리했습니다.
 
+Artifact는 MLflow Server의 Artifact Proxy(`mlflow-artifacts:/...`)를 통해 업로드·다운로드하므로, Model Serving Container는 Object Storage에 직접 접근하지 않고 MLflow Server를 통해 모델 Artifact를 내려받습니다.
+
 ---
 
 ## 21. 서비스 데이터 흐름
@@ -617,11 +668,18 @@ Host Nginx
           │   RDS MySQL
           │   cnc_wearpoint
           │
-          └── HTTPS / S3 API
+          ├── HTTPS / S3 API
+          │       ▼
+          │  Object Storage
+          │  cnc-wearpoint-data
+          │
+          └── Docker Network (POST /predictions)
                   ▼
-             Object Storage
-             cnc-wearpoint-data
+             Model Serving
+             cnc-wearpoint-serving:8001
 ```
+
+예측 요청 시 FastAPI는 Object Storage에서 이미지·센서 파일을 읽어 Serving에 전달하고, 응답의 `model_name`, `model_version`과 예측값을 검증한 뒤 RDS에 저장합니다. 공통 모니터링 추론(`MONITORING_INFERENCE_ENABLED=1`)도 같은 Serving을 호출합니다.
 
 Frontend에서 API 요청을 수행할 때도 외부 Browser 요청은 Nginx의 `/api/` 경로를 통해 Backend로 전달됩니다.
 
@@ -658,6 +716,19 @@ aimw.duckdns.org/mlflow/
 
 MLflow의 Metadata와 Artifact를 서로 다른 저장소에서 관리합니다.
 
+Model Serving Container도 MLflow Client로서 기동 시 같은 경로를 사용합니다.
+
+```text
+Model Serving Container (기동 시 1회)
+       │
+       │ HTTPS https://aimw.duckdns.org/mlflow/
+       ▼
+     Nginx → MLflow
+       │
+       ├── MODEL_ALIAS → Registry Version 해석
+       └── Artifact Proxy를 통해 models:/cnc-wearpoint-multitask/<version> 다운로드
+```
+
 ---
 
 ## 23. Network와 Storage 분리 기준
@@ -674,6 +745,7 @@ Measurement Metadata
 Wear Label
 Prediction
 Alert
+Monitoring 재생 상태 / 알림 / 추론 실행 기록
 Experiment
 Run
 Metric
@@ -757,8 +829,10 @@ RDS TLS + CA
 - RDS TLS 1.3
 - CA 인증서 검증
 - Object Storage Private Bucket
-- Credential Environment File 관리
+- Credential Environment File 관리 (`/etc/cnc-wearpoint/*.env`, `/etc/mlflow/mlflow.env`, Serving용 `inference.env`는 root 전용)
 - Nginx HTTPS 적용
+- Backend / Serving / MLflow 내부 Port의 Host Loopback(`127.0.0.1`) 바인딩
+- MLflow Basic Auth
 
 ---
 
@@ -817,7 +891,11 @@ RDS에는 Floating IP를 사용하지 않고 Internet Gateway로 연결되는 De
 
 ### Nginx 단일 진입점
 
-외부에 Frontend, Backend, MLflow의 Port를 각각 공개하지 않고 Nginx의 80/443만 외부 서비스 진입점으로 사용합니다.
+외부에 Frontend, Backend, MLflow의 Port를 각각 공개하지 않고 Nginx의 80/443만 외부 서비스 진입점으로 사용합니다. Model Serving은 외부 경로 없이 Backend에서만 호출합니다.
+
+### Docker Compose 기반 단일 VM 운영
+
+Kubernetes를 도입하지 않고 App VM의 Docker / Docker Compose로 Container를 운영합니다. Backend는 GitLab CI로 배포하고, Model Serving은 별도 Compose Project로 수동 운영합니다.
 
 ### HTTPS 적용
 
@@ -880,6 +958,23 @@ Image, Sensor, MLflow Artifact는 Object Storage로 분리했습니다.
        images / sensors            artifacts
 ```
 
+Model Serving 관련 통신:
+
+```text
+Backend :8000
+   │
+   │ Docker Network (compose_default)
+   │ POST /predictions
+   ▼
+Model Serving :8001 (127.0.0.1 바인딩, 외부 비공개)
+   │
+   │ 기동 시 1회: https://aimw.duckdns.org/mlflow/ (Nginx 경유)
+   ▼
+MLflow :5000 → Registry Version 해석 / Artifact Proxy로 모델 다운로드
+```
+
+RDS `cnc_wearpoint`와 `cnc-wearpoint-data`에는 Backend만 접근합니다. Serving은 RDS와 Object Storage에 직접 접근하지 않습니다.
+
 관리 접근:
 
 ```text
@@ -912,6 +1007,8 @@ OBJECT_STORAGE_READY
 FASTAPI_OBJECT_STORAGE_VERIFIED
 MLFLOW_RDS_READY
 MLFLOW_ARTIFACT_STORE_READY
+MODEL_SERVING_CONTAINER_READY
+BACKEND_CI_DEPLOY_READY
 ```
 
 초기 단계의 단순 App VM + RDS 구성에서 확장하여 현재는 다음까지 구성된 상태입니다.
@@ -921,8 +1018,11 @@ Domain
 → HTTPS
 → Nginx
 → Frontend / Backend / MLflow
+→ Backend → Model Serving (MLflow Registry 모델)
 → RDS / Object Storage
 ```
+
+2026-11-20 기준 운영 Backend는 `v0.1.12`, 운영 Serving은 `cnc-wearpoint-multitask` Version 2(`MODEL_ALIAS=candidate-opt`)를 사용합니다.
 
 서비스 데이터는 RDS와 Object Storage에 역할별로 분리되어 있으며, Database 통신에는 TLS 및 CA 인증서 검증을 적용했습니다.
 
@@ -942,9 +1042,15 @@ Domain
 
 ### Application 고가용성
 
-현재 Frontend, Backend, MLflow가 하나의 App VM에서 동작합니다.
+현재 Frontend, Backend, Model Serving, MLflow가 하나의 App VM에서 동작합니다.
 
-서비스 규모가 증가하면 역할별 Instance 분리 또는 Container Orchestration 환경으로 확장할 수 있습니다.
+서비스 규모가 증가하면 역할별 Instance 분리 또는 Container Orchestration(Kubernetes 등) 환경으로 확장할 수 있습니다. 이는 향후 검토 항목이며, 현재는 Docker Compose만 사용합니다.
+
+### Model Serving 운영 개선
+
+- Serving 실행 정의(`/opt/cnc-wearpoint/serving/compose.yaml`)를 저장소에서 관리하고 배포 절차 정리
+- Serving의 MLflow 접속을 공개 URL 대신 VM 내부 경로로 전환하는 방안 검토 (현재는 Nginx·인증서·DNS 장애 시 Serving 재시작 실패)
+- 모델 승격·롤백 절차의 운영 단계별 검증 ([테스트 계획](model-lifecycle/MODEL_LIFECYCLE_TEST_PLAN.md))
 
 ### Monitoring Network
 
@@ -975,6 +1081,8 @@ App VM은 외부 서비스 요청을 처리하고, RDS는 Private Network에서 
 
 Nginx를 단일 HTTPS 진입점으로 사용해 Frontend, Backend, MLflow를 Path 기반으로 연결하며, 이미지·Sensor 파일 및 MLflow Artifact는 Object Storage에서 별도로 관리합니다.
 
+AI 추론은 외부에 공개하지 않는 Model Serving Container가 담당하며, MLflow Model Registry의 모델을 기동 시 Load하여 Backend의 예측 요청을 처리합니다.
+
 또한 RDS 통신에는 TLS 1.3과 CA 인증서 검증을 적용하여 Network 분리뿐 아니라 Database 통신 구간의 보안도 강화했습니다.
 
-현재 구조는 팀 프로젝트 규모에서 운영 가능하면서도 향후 Load Balancer, 다중 App Instance, Monitoring Network, Container Orchestration 등으로 확장할 수 있도록 구성했습니다.
+현재 구조는 단일 App VM의 Docker Compose 기반으로 팀 프로젝트 규모에서 운영 가능하면서도, 필요 시 Load Balancer, 다중 App Instance, Monitoring Network, Container Orchestration 등으로 확장할 수 있도록 구성했습니다.

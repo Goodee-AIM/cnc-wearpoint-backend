@@ -23,3 +23,12 @@ storage/
 # 임시 예측 테스트 데이터
 rf_test_predictions.csv
 /manual-inputs/
+
+# 로컬 모델 평가용 데이터셋
+/ml/lifecycle/eval/
+
+# 로컬 테스트 데이터 및 MLflow 모델 아티팩트
+/testdata/
+
+# 로컬 모델 평가용 가상환경 (torch)
+/.venv-eval/
